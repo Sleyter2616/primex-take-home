@@ -13,10 +13,13 @@ npm ci && npm run dev
 Open the URL printed by Vite (normally http://127.0.0.1:5173).
 
 ```sh
-npm test       # deterministic parsing, buffering and lifecycle tests
-npm run build # TypeScript checks and production build
+npm test           # deterministic parsing, buffering, lifecycle and stale-label tests
+npm run typecheck  # TypeScript only
+npm run build      # TypeScript checks and production build
 npm run preview
 ```
+
+Open `/?profile=1` on the dev server to show the render profiler (development builds only; it is compiled out of `npm run build`).
 
 ## Scope
 
@@ -24,7 +27,7 @@ npm run preview
 - Up to 20 bid and ask levels, price, base-asset size, cumulative size, and proportional depth bars. Asks are displayed above bids; accumulation starts at the best price on each side.
 - Latest 50 unique trades, newest first, with aggressor side and UTC time.
 - One-minute candles, seeded with approximately 200 minutes of history and updated live. At most 300 candles are retained.
-- Loading, empty, REST failure, connection and stale-data states; automatic reconnect and resubscription.
+- Loading, empty, REST failure, connection and stale-data states; automatic reconnect and resubscription. A panel is marked stale (`Stale · reconnecting` or `Stale · offline`) only when it is showing retained data while the socket is not live. Before its first data arrives, a panel shows its loading text instead.
 
 ## Architecture and performance
 
@@ -38,17 +41,47 @@ testnet WebSocket -> validation -> frame buffer -> Zustand store
                      candle         bounded merge   +-> chart API
 ```
 
-`src/data/api.ts` owns the fixed testnet endpoints and REST requests. `types.ts` validates incoming fields and implements ordering, deduplication, depth accumulation and bounded merges. `feed.ts` owns sockets, timers, history requests and the animation-frame buffer. Views live in `src/ui/`.
+`src/data/api.ts` owns the fixed testnet endpoints and REST requests. `types.ts` validates incoming fields and implements ordering, deduplication, depth accumulation and bounded merges. `feed.ts` owns sockets, timers, history requests and the animation-frame buffer. `store.ts` holds the Zustand store and the `staleLabel` rule. Views live in `src/ui/`. `src/perf/metrics.ts` holds the development-only event counters; it has no React import, so the data layer can count socket messages without depending on the UI.
 
-The book feed provides complete snapshots, so only the newest snapshot within a frame needs to reach the screen. Trades are accumulated and deduplicated before publishing, preserving the newest 50 executions. Candles merge by opening timestamp. Normal feed updates publish at most once per animation frame; reconnect flushes buffered data immediately, and rejected-ID diagnostics update separately; individual React panels select their own slices. Book rows compare their displayed values, and existing trade rows retain stable keys. These boundaries are intended to isolate book ticks from the shell and chart React component. Slice-reference tests pass; React Profiler/render-count evidence has not yet been collected, so render isolation is not claimed as measured.
+The book feed provides complete snapshots, so only the newest snapshot within a frame needs to reach the screen. Trades are accumulated and deduplicated before publishing, preserving the newest 50 executions. Candles merge by opening timestamp. Normal feed updates publish at most once per animation frame; reconnect flushes buffered data immediately, and rejected-ID diagnostics update separately; individual React panels select their own slices. Book rows compare their displayed values, and existing trade rows retain stable keys. These boundaries isolate book ticks from the shell and the chart React component; see Measured render counts below.
 
 The chart subscribes directly to the store. Changed candles use the chart library's imperative `update` API. Initial history, refreshed history and movement of the bounded window use `setData`. The chart instance survives market changes and is removed on component teardown.
 
 Each selected market owns one socket with three subscriptions. A market switch tears down that session and starts another. This costs an extra handshake but simplifies ownership within the exercise's time budget. A generation guard, selected-market check and abort controller prevent obsolete socket or REST callbacks from contaminating the new market, including BTC → ETH → BTC races. Strict Mode cleanup follows the same path.
 
-Reconnect retries are **unbounded in attempt count**, with exponential delay plus jitter capped at **15 seconds total**. Each successful connection resubscribes and refreshes the last 200 minutes of candle history. An offline event marks the feed offline and reconnects immediately; an online event resets backoff and connects immediately. Both event listeners are removed on disposal. Buffered current-generation trades and candles are published before reconnect clears the buffers, so an interruption between frames does not discard them. Heartbeats run every 15 seconds; a silent connection is detected on a heartbeat check after 35 seconds without a message. Socket establishment times out after 10 seconds and history after 12 seconds. Retained book/trades are marked stale while reconnecting. During a history request, live candles are preserved and overlaid on the REST response so late history cannot roll back those updates.
+Reconnect retries are **unbounded in attempt count**, with exponential delay plus jitter capped at **15 seconds total**. Each successful connection resubscribes and refreshes the last **200 minutes** of candle history (`candleSnapshot` from now minus 200 minutes). A gap longer than 200 minutes leaves a hole in the chart. Trades missed while disconnected are **not replayed**: the tape shows only what the new subscription sends. An offline event marks the feed offline and reconnects immediately; an online event resets backoff and connects immediately. Both event listeners are removed on disposal. Buffered current-generation trades and candles are published before reconnect clears the buffers, so an interruption between frames does not discard them. Heartbeats run every 15 seconds; a silent connection is detected on a heartbeat check after 35 seconds without a message. Socket establishment times out after 10 seconds and history after 12 seconds. Retained book/trades are marked stale while reconnecting. During a history request, live candles are preserved and overlaid on the REST response so late history cannot roll back those updates.
 
 Failed candle history gets one independent retry after five seconds while the same socket generation remains live. A second failure waits for the next connection. Reconnect and disposal cancel this retry. Trades sort newest timestamp first, then numeric `tid` descending for equal timestamps; the tie-break is deterministic, not a claim that IDs encode execution order. Invalid safe-integer `tid` values are counted in `rejectedTradeIds` for the selected feed and logged once per affected batch without payload contents.
+
+## Measured render counts
+
+Method (2026-09-23, about 19:30 UTC): `npm run dev`, page opened at `/?profile=1` in the Claude desktop app's built-in Chromium 152 browser at 1024 x 768. React Strict Mode on. Each panel is wrapped in a React `<Profiler>`; its `onRender` callback increments a counter once per **commit** of that panel. Strict Mode double rendering does not add commits. The feed and chart adapter count WebSocket book messages, trade batches, and chart `update` / `setData` calls in the same window. After history loaded, the "Measure 60 seconds" button recorded one 60-second window with no user interaction. The raw JSON is printed to the console as `HL_PROFILE_RESULT` and below the button.
+
+| Counter (60 s) | BTC | ETH |
+|---|---|---|
+| `bookMessages` | 12 | 11 |
+| `OrderBook` commits | 12 | 11 |
+| `MarketSummary` commits | 6 | 2 |
+| `tradeBatches` | 1 | 2 |
+| `TradesTape` commits | 1 | 2 |
+| `seriesUpdate` (chart API) | 1 | 2 |
+| `seriesSetData` (chart API) | 0 | 0 |
+| `PriceChart` commits | 0 | 0 |
+| `Header`, `ConnectionStatus`, `MarketSelector` commits | 0 | 0 |
+
+What this shows: each panel committed only when its own slice changed. The order book committed once per book message. The summary committed only when best bid, best ask or mid moved. Live candles reached the chart through `update` without a React commit of `PriceChart`. The header, status and selector did not commit at all.
+
+What this does not show:
+- Throughput. Testnet was quiet during both windows. A raw WebSocket opened in the same page, subscribed to BTC and ETH for 30 seconds, received 7 book snapshots per coin, so the low counts reflect the feed, not dropped messages. Frame coalescing under a high message rate was not exercised in the browser; it is covered only by the unit tests.
+- Timing. These are commit counts from a development build, not frame times or durations. No frame-rate claim is made.
+- The browser pane reported `document.visibilityState` as `hidden` (`visibleAtStart: false` in the JSON), but `requestAnimationFrame` was measured running at 76 callbacks in about one second just before the run, so the frame buffer was flushing normally.
+
+Raw results:
+
+```json
+{"coin":"BTC","visibleAtStart":false,"visibilityChanges":0,"windowMs":60000,"completedAfterMs":60001,"Header":0,"ConnectionStatus":0,"MarketSelector":0,"MarketSummary":6,"PriceChart":0,"TradesTape":1,"OrderBook":12,"bookMessages":12,"tradeBatches":1,"seriesUpdate":1,"seriesSetData":0}
+{"coin":"ETH","visibleAtStart":false,"visibilityChanges":0,"windowMs":60000,"completedAfterMs":60002,"Header":0,"ConnectionStatus":0,"MarketSelector":0,"MarketSummary":2,"PriceChart":0,"TradesTape":2,"OrderBook":11,"bookMessages":11,"tradeBatches":2,"seriesUpdate":2,"seriesSetData":0}
+```
 
 ## Libraries
 
@@ -60,18 +93,35 @@ Failed candle history gets one independent retry after five seconds while the sa
 
 ## Verification
 
-The automated suite (29 tests at checkpoint b) covers offline/online events, the exact backoff cap including jitter, one-shot history retry, rejection diagnostics, a real captured trades fixture, reconnect flushing, snapshot ordering and depth, malformed inputs, trade deduplication and caps, both candle payload shapes, history/live merging, frame coalescing, unrelated slice identity, late-market callbacks, reconnect/resubscribe, heartbeat timeout and teardown.
+The automated suite (31 tests) covers the stale-label rule, offline/online events, the exact backoff cap including jitter, one-shot history retry, rejection diagnostics, a real captured trades fixture, reconnect flushing, snapshot ordering and depth, malformed inputs, trade deduplication and caps, both candle payload shapes, history/live merging, frame coalescing, unrelated slice identity, late-market callbacks, reconnect/resubscribe, heartbeat timeout and teardown.
 
-The development screen was also checked against real testnet feeds in a browser. Automated lifecycle tests simulate connection failures; they are not a substitute for a production soak test or measured browser performance profile.
+Browser checks on 2026-09-23 against live testnet (built-in Chromium 152): BTC and ETH load with history, book and trades; switching BTC to ETH shows `Connecting` and loading text with no stale labels, then goes live within 5 seconds; dispatching the browser `offline` event marks the book, trades, summary and chart `Stale · offline`, and the `online` event reconnects and clears the labels; no horizontal scroll or overlapping text at 375, 768 and 1280 pixels wide; no console errors. The `offline` and `online` checks fire the window events the feed listens to; they do not cut the real network. The markets REST failure and `Retry` path was not reproduced in the browser. Automated lifecycle tests simulate connection failures; they are not a substitute for a production soak test.
 
-## Trade-offs and next steps
+## Trade-offs
 
-- Measure frame times, React commits and memory under a recorded high-volume feed before choosing any heavier optimization. There are only 40 book rows and 50 trade rows, so virtualization is unnecessary for this scope.
-- Add browser automation for rapid market switching, offline/online recovery, keyboard access and mobile layout. Extend per-channel freshness indicators: the current badge reports socket health, not a guarantee that every channel is fresh.
-- Recover and clearly mark trade gaps after disconnect. The tape currently merges what the subscription sends; it does not promise a complete execution history.
-- Add an explicit manual history retry control after the automatic one-shot retry is exhausted.
-- Add stricter protocol/schema coverage, including candle revision ordering within the same minute, and recorded fixture replay. Numerical display uses JavaScript numbers, adequate for this read-only slice; order entry would need explicit decimal and tick-size rules.
-- Consider retaining a socket across market changes once subscription acknowledgements and reconnect behavior have broader coverage.
+Each entry: the decision, the alternative, and why.
+
+- **One socket per selected market.** Alternative: one shared socket, unsubscribing and resubscribing on market change. A fresh socket per market makes ownership simple: disposal closes everything that market started, and a generation check drops late callbacks. Cost: one extra handshake per switch.
+- **Publish at most once per animation frame.** Alternative: write every message to the store. Book messages are full snapshots, so only the newest one in a frame is worth rendering; trades and candles are merged in the buffer. This bounds React work to the display rate regardless of message rate.
+- **Vanilla Zustand store read by both React and the chart.** Alternative: React context or a React-only store. The chart subscribes outside React and calls the chart API directly, so live candles do not re-render the chart component (measured: 0 `PriceChart` commits).
+- **`update` for changed candles, `setData` only for history, market change or window movement.** Alternative: `setData` on every change. `update` touches one bar; `setData` rebuilds the series.
+- **Unbounded reconnect attempts, delay capped at 15 seconds including jitter.** Alternative: give up after N attempts. A read-only market screen should recover by itself when the network returns; the cap keeps recovery prompt, and jitter avoids synchronized retries.
+- **One automatic history retry per connection.** Alternative: retry until it succeeds. One retry covers a transient REST failure without hammering the endpoint; the next reconnect tries again.
+- **Stale means "not live and showing retained data".** Alternative: stale whenever the socket is not live. The simpler rule labelled empty panels as stale during every initial connect and market switch, which was misleading.
+- **Trades sorted by time, then numeric `tid` descending.** Alternative: arrival order. The tie-break makes the order deterministic; it is not a claim that IDs encode execution order.
+- **JavaScript numbers for prices and sizes.** Alternative: a decimal library. Adequate for display only; order entry would need exact decimals and tick sizes.
+- **No list virtualization.** Alternative: virtualize the book and tape. At 40 book rows and 50 trade rows the DOM is small; row components are memoized instead.
+- **Development-only profiler behind `?profile=1`.** Alternative: a permanent metrics layer or an external profiler. It records counts with the same code that runs in development, costs nothing in production (compiled out), and the counters live in `src/perf` so the data layer does not import UI code.
+
+## Limitations and next steps
+
+- Render counts were measured on a quiet testnet feed. Measure again under a recorded high-volume replay before choosing any heavier optimization.
+- Reconnect refills only the last 200 minutes of candles. Trades missed during a disconnect are not replayed or marked as a gap.
+- The connection badge reports socket health, not per-channel freshness.
+- No manual history retry control after the automatic retry is used.
+- Candle revision `n` is not treated as a sequence number; same-minute out-of-order live revisions are not detected.
+- No browser automation yet for market switching, offline recovery, keyboard access or mobile layout; these were checked by hand as described in Verification.
+- A shared socket across market changes could be reconsidered once subscription acknowledgements have broader test coverage.
 
 The application deliberately excludes trading, authentication, wallet integration, order forms, alternate candle intervals and persistence.
 

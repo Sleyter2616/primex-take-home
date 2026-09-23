@@ -2,14 +2,14 @@ import { useEffect, useRef } from 'react';
 import { useStore } from 'zustand';
 import { CandlestickSeries, ColorType, createChart, CrosshairMode,
   type CandlestickData, type UTCTimestamp } from 'lightweight-charts';
-import { metric } from './profile';
-import { marketStore } from '../data/store';
+import { metric } from '../perf/metrics';
+import { marketStore, staleLabel } from '../data/store';
 import type { Candle } from '../data/types';
 
 const bar = (candle: Candle): CandlestickData => ({ ...candle, time: candle.time as UTCTimestamp });
 
 export function PriceChart() {
-  const stale = useStore(marketStore, state => state.connection !== 'live');
+  const stale = useStore(marketStore, state => staleLabel(state.connection, state.candles.length > 0));
   const container = useRef<HTMLDivElement>(null);
   const loading = useStore(marketStore, state => state.historyLoading);
   const error = useStore(marketStore, state => state.historyError);
@@ -80,7 +80,7 @@ export function PriceChart() {
       {empty && <div className="chart-empty">{loading ? 'Loading candle history…' : 'Waiting for the first candle'}</div>}
     </div>
     <div className={`chart-caption ${error ? 'warning' : ''} ${stale ? 'stale' : ''}`}>
-      <span>{stale && 'Stale · connection unavailable. '}{error || (loading && !empty ? 'Refreshing history… live updates continue.' : 'Scroll to zoom · drag to explore')}</span>
+      <span>{stale && `${stale}. `}{error || (loading && !empty ? 'Refreshing history… live updates continue.' : 'Scroll to zoom · drag to explore')}</span>
       <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">Charts by TradingView</a>
     </div>
   </section>;

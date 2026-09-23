@@ -25,3 +25,8 @@ export const createMarketStore = () => createStore<MarketState>(() => ({
 }));
 export type MarketStore = ReturnType<typeof createMarketStore>;
 export const marketStore = createMarketStore();
+
+// A panel is stale only while it shows retained data from a connection that is not live.
+// Before the first data arrives (initial connect, market switch) the panel is loading, not stale.
+export const staleLabel = (connection: Connection, hasData: boolean) =>
+  !hasData || connection === 'live' ? null : connection === 'offline' ? 'Stale · offline' : 'Stale · reconnecting';

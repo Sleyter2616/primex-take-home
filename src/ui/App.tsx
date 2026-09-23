@@ -2,7 +2,7 @@ import { memo, useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { fetchMarkets } from '../data/api';
 import { MarketFeed } from '../data/feed';
-import { marketStore } from '../data/store';
+import { marketStore, staleLabel } from '../data/store';
 import type { Level, Trade } from '../data/types';
 import { PriceChart } from './Chart';
 import { ProfileControls, profilePanel } from './profile';
@@ -64,13 +64,13 @@ function ConnectionStatus() {
 }
 
 function MarketSummary() {
-  const stale = useStore(marketStore, state => state.connection !== 'live');
+  const stale = useStore(marketStore, state => staleLabel(state.connection, state.book !== null));
   const mid = useStore(marketStore, state => state.book?.bids[0] && state.book?.asks[0]
     ? (state.book.bids[0].price + state.book.asks[0].price) / 2 : null);
   const bestBid = useStore(marketStore, state => state.book?.bids[0]?.price);
   const bestAsk = useStore(marketStore, state => state.book?.asks[0]?.price);
-  return <div className={`market-stats ${stale ? 'stale' : ''}`} aria-label={stale ? 'Market summary, stale' : 'Market summary'}>
-    <div className="stat primary"><span>Mid price{stale ? ' · stale' : ''}</span><strong>{mid ? price(mid) : '—'}</strong></div>
+  return <div className={`market-stats ${stale ? 'stale' : ''}`} aria-label={stale ? `Market summary, ${stale}` : 'Market summary'}>
+    <div className="stat primary"><span>{stale ?? 'Mid price'}</span><strong>{mid ? price(mid) : '—'}</strong></div>
     <div className="stat"><span>Best bid</span><strong className="buy">{bestBid ? price(bestBid) : '—'}</strong></div>
     <div className="stat"><span>Best ask</span><strong className="sell">{bestAsk ? price(bestAsk) : '—'}</strong></div>
     <div className="stat"><span>Spread</span><strong>{bestBid && bestAsk ? price(bestAsk - bestBid) : '—'} <small>USD</small></strong></div>
@@ -94,7 +94,7 @@ function OrderBook() {
   const book = useStore(marketStore, state => state.book);
   const coin = useStore(marketStore, state => state.coin);
   const decimals = useStore(marketStore, state => state.markets.find(market => market.name === state.coin)?.sizeDecimals ?? 5);
-  const stale = useStore(marketStore, state => state.connection !== 'live');
+  const stale = useStore(marketStore, state => staleLabel(state.connection, state.book !== null));
   const max = Math.max(book?.bids.at(-1)?.cumulative ?? 0, book?.asks.at(-1)?.cumulative ?? 0, 0.000001);
   const spread = book?.bids[0] && book?.asks[0] ? book.asks[0].price - book.bids[0].price : null;
   return <section className="panel book-panel" aria-label="Live order book">
@@ -115,7 +115,7 @@ function OrderBook() {
         </div>
       </div>}
     </div>
-    <div className="panel-foot"><span>{stale && book ? 'Stale · reconnecting' : 'Cumulative size depth'}</span><span>USD</span></div>
+    <div className="panel-foot"><span>{stale ?? 'Cumulative size depth'}</span><span>USD</span></div>
   </section>;
 }
 
@@ -130,10 +130,10 @@ function TradesTape() {
   const received = useStore(marketStore, state => state.tradesReceived);
   const coin = useStore(marketStore, state => state.coin);
   const decimals = useStore(marketStore, state => state.markets.find(market => market.name === state.coin)?.sizeDecimals ?? 5);
-  const stale = useStore(marketStore, state => state.connection !== 'live');
+  const stale = useStore(marketStore, state => staleLabel(state.connection, state.trades.length > 0));
   return <section className="panel trades-panel" aria-label="Recent trades">
     <div className="panel-heading"><h2>Recent trades <span className="count">{trades.length}</span></h2>
-      <span className="panel-meta">Latest 50 · {stale && trades.length ? 'stale' : 'testnet'}</span></div>
+      <span className="panel-meta">Latest 50 · {stale ?? 'testnet'}</span></div>
     <div className={`trades-scroll ${stale ? 'stale' : ''}`}>
       <table><thead><tr><th>Price (USD)</th><th>Size ({coin || '—'})</th><th>Side</th><th>Time (UTC)</th></tr></thead>
         <tbody>{trades.map(trade => <TradeRow key={trade.id} trade={trade} decimals={decimals} />)}</tbody></table>
@@ -151,21 +151,15 @@ function FooterClock() {
 export function App() {
   return <div className="terminal">
     <FeedLifecycle />
-    {import.meta.env.DEV && <ProfileControls />}
-    {import.meta.env.DEV ? profilePanel('Header/ConnectionStatus', (
-      <header className="topbar"><a className="brand" href="/" aria-label="Market terminal home"><span className="brand-mark">≋</span> PERP<span className="brand-divider">/</span><span className="brand-sub">TERMINAL</span></a>
+    <ProfileControls />
+    {profilePanel('Header', <header className="topbar"><a className="brand" href="/" aria-label="Market terminal home"><span className="brand-mark">≋</span> PERP<span className="brand-divider">/</span><span className="brand-sub">TERMINAL</span></a>
       <div className="topbar-right"><span className="network-tag">TESTNET</span><a href="https://app.hyperliquid-testnet.xyz/trade" target="_blank" rel="noreferrer">Hyperliquid ↗</a></div>
-    </header>
-    )) : (
-      <header className="topbar"><a className="brand" href="/" aria-label="Market terminal home"><span className="brand-mark">≋</span> PERP<span className="brand-divider">/</span><span className="brand-sub">TERMINAL</span></a>
-      <div className="topbar-right"><span className="network-tag">TESTNET</span><a href="https://app.hyperliquid-testnet.xyz/trade" target="_blank" rel="noreferrer">Hyperliquid ↗</a></div>
-    </header>
-    )}
+    </header>)}
     <main>
       <div className="workspace-heading"><div><span className="eyebrow">MARKET OVERVIEW</span><h1>A live view of the market.</h1></div>
-        {import.meta.env.DEV ? profilePanel('Header/ConnectionStatus', <ConnectionStatus />) : <ConnectionStatus />}</div>
-      <div className="market-bar">{import.meta.env.DEV ? profilePanel('MarketSelector', <MarketSelector />) : <MarketSelector />}{import.meta.env.DEV ? profilePanel('MarketSummary', <MarketSummary />) : <MarketSummary />}</div>
-      <div className="workspace"><div className="main-column">{import.meta.env.DEV ? profilePanel('PriceChart', <PriceChart />) : <PriceChart />}{import.meta.env.DEV ? profilePanel('TradesTape', <TradesTape />) : <TradesTape />}</div>{import.meta.env.DEV ? profilePanel('OrderBook', <OrderBook />) : <OrderBook />}</div>
+        {profilePanel('ConnectionStatus', <ConnectionStatus />)}</div>
+      <div className="market-bar">{profilePanel('MarketSelector', <MarketSelector />)}{profilePanel('MarketSummary', <MarketSummary />)}</div>
+      <div className="workspace"><div className="main-column">{profilePanel('PriceChart', <PriceChart />)}{profilePanel('TradesTape', <TradesTape />)}</div>{profilePanel('OrderBook', <OrderBook />)}</div>
     </main>
     <footer><div><span className="footer-dot" />Hyperliquid testnet <span className="footer-divider">/</span> Market data only. No trading.</div><FooterClock /></footer>
   </div>;

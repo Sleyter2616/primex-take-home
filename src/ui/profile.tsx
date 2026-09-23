@@ -1,27 +1,22 @@
 import { Profiler, useEffect, useRef, useState, type ReactNode } from 'react';
+import { metric, profiling, startRecording, stopRecording } from '../perf/metrics';
 
-const enabled = import.meta.env.DEV && typeof location !== 'undefined'
-  && new URLSearchParams(location.search).get('profile') === '1';
-const panels = ['Header/ConnectionStatus', 'MarketSelector', 'MarketSummary', 'PriceChart', 'TradesTape', 'OrderBook'];
-let active: { started: number; ends: number; counts: Record<string, number> } | null = null;
-export function metric(name: string) {
-  if (enabled && active && performance.now() < active.ends) active.counts[name] = (active.counts[name] ?? 0) + 1;
-}
+const panels = ['Header', 'ConnectionStatus', 'MarketSelector', 'MarketSummary', 'PriceChart', 'TradesTape', 'OrderBook'];
+const events = ['bookMessages', 'tradeBatches', 'seriesUpdate', 'seriesSetData'];
+const windowMs = 60_000;
+
 export function profilePanel(id: string, children: ReactNode) {
-  return enabled ? <Profiler id={id} onRender={() => metric(id)}>{children}</Profiler> : children;
+  return profiling ? <Profiler id={id} onRender={() => metric(id)}>{children}</Profiler> : children;
 }
 export function ProfileControls() {
   const [result, setResult] = useState('Ready: wait for history, then start a 60-second window.');
   const [running, setRunning] = useState(false);
   const cleanup = useRef<() => void>(() => {});
   useEffect(() => () => cleanup.current(), []);
-  if (!enabled) return null;
+  if (!profiling) return null;
   return <aside style={{ padding: 16, overflowWrap: 'anywhere' }}>
     <button disabled={running} onClick={() => {
-      const started = performance.now();
-      const run = { started, ends: started + 60_000,
-        counts: Object.fromEntries([...panels, 'bookMessages', 'tradeBatches', 'seriesUpdate', 'seriesSetData'].map(id => [id, 0])) };
-      active = run;
+      const run = startRecording([...panels, ...events], windowMs);
       const visibleAtStart = document.visibilityState === 'visible';
       let visibilityChanges = 0;
       const changed = () => visibilityChanges++;
@@ -29,14 +24,14 @@ export function ProfileControls() {
       const coin = document.querySelector<HTMLSelectElement>('#market')?.value;
       setRunning(true); setResult('Recording 60 seconds…');
       const timer = setTimeout(() => {
-        if (active === run) active = null;
+        stopRecording(run);
         document.removeEventListener('visibilitychange', changed);
-        const report = JSON.stringify({ coin, visibleAtStart, visibilityChanges, windowMs: 60_000, completedAfterMs: Math.round(performance.now() - started), ...run.counts });
+        const report = JSON.stringify({ coin, visibleAtStart, visibilityChanges, windowMs, completedAfterMs: Math.round(performance.now() - run.started), ...run.counts });
         console.info('HL_PROFILE_RESULT', report); setResult(report); setRunning(false);
-      }, 60_000);
+      }, windowMs);
       cleanup.current = () => {
         clearTimeout(timer); document.removeEventListener('visibilitychange', changed);
-        if (active === run) active = null;
+        stopRecording(run);
       };
     }}>Measure 60 seconds</button>
     <output id="hl-profile-result" style={{ display: 'block', marginTop: 8 }}>{result}</output>

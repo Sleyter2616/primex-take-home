@@ -1,4 +1,4 @@
-import { metric } from '../ui/profile';
+import { metric } from '../perf/metrics';
 import { fetchHistory, WS_URL } from './api';
 import { mergeCandles, mergeTrades, parseBook, parseCandles, parseTrades, record,
   type Book, type Candle, type Trade } from './types';

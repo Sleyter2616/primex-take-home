@@ -1,20 +1,20 @@
 # Resume checkpoint: 2026-09-23
 
-Checkpoint **b** committed (`6a8c5d9`). Checkpoint **c** was started and paused on 2026-09-23; the partial work is saved in the next `wip:` commit. Implementation continues in Claude Code from here.
+Checkpoint **c** is complete (commit `feat: complete checkpoint c`). Next: review with `/codex:review --base 6a8c5d9`, fixing only correctness or requirement gaps.
 
-## Checkpoint c: state at pause (2026-09-23)
+## Checkpoint c completed (2026-09-23, Claude Code)
 
-Done (uncommitted work captured in the wip commit):
-- Market summary and chart caption show a stale indication whenever the connection is not live.
-- `onopen` clears the offline flag; a regression test covers offline, reopen, then close going to `reconnecting`.
-- Dev-only render profiler (`src/ui/profile.tsx`): wraps each panel in `<Profiler>` when the page is opened with `?profile=1`, records a 60-second window of panel renders, book messages, trade batches and chart `update`/`setData` calls.
-- Verified on a clean install of this tree: 29 tests pass, typecheck and production build pass. Not verified in a browser.
+- Profiler counters moved to `src/perf/metrics.ts` (no React import); `feed.ts` no longer imports from `src/ui`.
+- `Header` and `ConnectionStatus` are profiled under separate ids; the duplicated DEV/non-DEV header JSX and per-panel ternaries are gone. The production bundle contains no profiler strings.
+- Stale rule fixed: a panel is stale only when it shows retained data while not live (`staleLabel` in `store.ts`, 2 new tests). Before, empty panels said "stale" during every initial connect and market switch.
+- Phone layout fix: the PERP badge overlapped the mid price at 375 px; the picker no longer shrinks below its content.
+- Profiler runs recorded for BTC and ETH (60 s each); numbers, method and caveats are in README "Measured render counts". Testnet was quiet, so the runs show isolation, not throughput.
+- Browser-checked: market switch, simulated offline/online, 375/768/1280 widths, no console errors. Not reproduced: markets REST failure and Retry.
+- README: Trade-offs section, 200-minute history window, no trade replay, limitations. 31 tests, typecheck and build pass.
 
-Open issues found at handoff:
-- The header and `ConnectionStatus` are both profiled under the id `Header/ConnectionStatus`, so their counts merge. The header JSX is duplicated across the DEV and non-DEV branches.
-- `src/data/feed.ts` imports `metric` from `src/ui/profile`, so the data layer now depends on the UI layer. Consider a neutral `src/perf` module.
-- No profiler run has been recorded yet, so no render-count numbers exist.
+## Checkpoint c: state at pause (history)
 
+Codex paused checkpoint c at `0483b91` with stale indications, the `onopen` offline-flag fix and test, and the dev-only profiler. The three open issues it listed (merged profiler id, data layer importing UI, no recorded run) are resolved above.
 
 ## Completed
 
@@ -33,17 +33,10 @@ Open issues found at handoff:
 - Added scrambled/overlapping trade input checks with exact retained identities, REST-before-frame and reconnect-gap candle tests, populated A → B → A with obsolete retry response rejection, and capped-backoff/disposal tests.
 - 29 tests, explicit typecheck and production build pass. No browser performance evidence collected at this checkpoint.
 
-## Then: checkpoint c
-
-1. Add explicit chart/summary stale indications and audit visible loading, empty and error states. Inspect responsive behavior in a browser.
-2. Record real React Profiler or console render-count observations with an explicit methodology. Store-reference tests alone do not prove render isolation. Do not claim a frame-rate benchmark without measuring it.
-3. Update README with measured observations, exact reconnect history window (200 minutes), no guaranteed trade replay, and remaining limitations. Refresh one-command run and architecture notes.
-4. Run tests, typecheck and build; commit checkpoint c; stop and report.
-
 ## Unverified / limitations
 
-- No new browser run after checkpoints a/b. Prior session verified live BTC, ETH and SOL with no captured console warnings/errors.
-- No React render-count measurements yet. Existing README architecture wording describes the intended isolation, not measured evidence.
+- Render counts measured only on a quiet testnet feed; no high-volume replay and no frame timings.
+- Markets REST failure and Retry path not reproduced in a browser.
 - Candle revision `n` is not treated as a protocol sequence number. Same-minute out-of-order live revisions remain a documented limitation; confirm a server ordering contract before adding heuristics.
 - Reconnect fills only the retained history window, not arbitrary-duration gaps. Trade replay is not guaranteed.
 - No Git remote configured; code is durable on the user's Mac and available to a local Claude reviewer. No deployment or submission performed.
