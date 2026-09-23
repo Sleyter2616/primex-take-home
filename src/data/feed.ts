@@ -1,0 +1,212 @@
+import { fetchHistory, WS_URL } from './api';
+import { mergeCandles, mergeTrades, parseBook, parseCandles, parseTrades, record,
+  type Book, type Candle, type Trade } from './types';
+import type { MarketStore, MarketState } from './store';
+
+export interface SocketLike {
+  readyState: number;
+  onopen: (() => void) | null;
+  onclose: (() => void) | null;
+  onerror: (() => void) | null;
+  onmessage: ((event: { data: string }) => void) | null;
+  send(data: string): void;
+  close(): void;
+}
+interface Dependencies {
+  socket: () => SocketLike;
+  history: typeof fetchHistory;
+  frame: (callback: () => void) => number;
+  cancelFrame: (id: number) => void;
+  random: () => number;
+}
+const defaults: Dependencies = {
+  socket: () => new WebSocket(WS_URL) as unknown as SocketLike,
+  history: fetchHistory,
+  frame: callback => requestAnimationFrame(callback),
+  cancelFrame: id => cancelAnimationFrame(id),
+  random: Math.random,
+};
+
+/** One selected-market session. Stop invalidates every socket, timer and REST callback. */
+export class MarketFeed {
+  private deps: Dependencies;
+  private active = false;
+  private generation = 0;
+  private socket: SocketLike | null = null;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private heartbeat?: ReturnType<typeof setInterval>;
+  private connectionTimer?: ReturnType<typeof setTimeout>;
+  private historyAbort?: AbortController;
+  private failures = 0;
+  private lastMessage = 0;
+  private frameId: number | null = null;
+  private pendingBook: Book | null = null;
+  private pendingTrades: Trade[] = [];
+  private pendingCandles: Candle[] = [];
+  private sawTrades = false;
+  private liveDuringHistory: Candle[] | null = null;
+
+  constructor(private store: MarketStore, private coin: string, deps: Partial<Dependencies> = {}) {
+    this.deps = { ...defaults, ...deps };
+  }
+
+  start() {
+    if (this.active) return;
+    this.active = true;
+    this.store.setState({ coin: this.coin, connection: 'connecting', book: null,
+      trades: [], tradesReceived: false, candles: [], historyLoading: true,
+      historyError: null, historyRevision: 0, reconnects: 0, feedError: null });
+    this.connect();
+  }
+
+  stop() {
+    this.active = false;
+    this.generation++;
+    this.cleanConnection();
+    clearTimeout(this.retryTimer);
+    this.clearPending();
+  }
+
+  private subscriptions() {
+    return [ { type: 'l2Book', coin: this.coin }, { type: 'trades', coin: this.coin },
+      { type: 'candle', coin: this.coin, interval: '1m' } ];
+  }
+
+  private cleanConnection() {
+    clearInterval(this.heartbeat);
+    clearTimeout(this.connectionTimer);
+    this.historyAbort?.abort();
+    this.liveDuringHistory = null;
+    const socket = this.socket;
+    this.socket = null;
+    if (socket) {
+      socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
+      if (socket.readyState === 1) {
+        for (const subscription of this.subscriptions()) {
+          try { socket.send(JSON.stringify({ method: 'unsubscribe', subscription })); } catch { /* closing */ }
+        }
+      }
+      socket.close();
+    }
+  }
+
+  private clearPending() {
+    if (this.frameId !== null) this.deps.cancelFrame(this.frameId);
+    this.frameId = null;
+    this.pendingBook = null;
+    this.pendingTrades = [];
+    this.pendingCandles = [];
+    this.sawTrades = false;
+  }
+
+  private connect() {
+    if (!this.active) return;
+    const generation = ++this.generation;
+    const current = () => this.active && this.generation === generation && this.store.getState().coin === this.coin;
+    let socket: SocketLike;
+    try { socket = this.deps.socket(); } catch { this.reconnect(); return; }
+    this.socket = socket;
+    this.connectionTimer = setTimeout(() => { if (current()) this.reconnect(); }, 10_000);
+    socket.onopen = () => {
+      if (!current()) return;
+      clearTimeout(this.connectionTimer);
+      this.lastMessage = Date.now();
+      this.store.setState({ connection: 'live', feedError: null });
+      for (const subscription of this.subscriptions()) {
+        socket.send(JSON.stringify({ method: 'subscribe', subscription }));
+      }
+      this.loadHistory(generation);
+      this.heartbeat = setInterval(() => {
+        if (!current()) return;
+        if (Date.now() - this.lastMessage > 35_000) { this.reconnect(); return; }
+        try { socket.send(JSON.stringify({ method: 'ping' })); } catch { this.reconnect(); }
+      }, 15_000);
+    };
+    socket.onclose = socket.onerror = () => { if (current()) this.reconnect(); };
+    socket.onmessage = event => {
+      if (!current()) return;
+      this.lastMessage = Date.now();
+      let message: unknown;
+      try { message = JSON.parse(event.data); } catch { return; }
+      if (!record(message)) return;
+      if (message.channel === 'error') {
+        this.store.setState({ feedError: 'Testnet rejected a subscription. Reconnecting…' });
+        this.reconnect();
+        return;
+      }
+      if (message.channel === 'l2Book') {
+        const book = parseBook(message.data, this.coin);
+        const previousTime = this.pendingBook?.time ?? this.store.getState().book?.time ?? 0;
+        if (book && book.time >= previousTime) { this.pendingBook = book; this.failures = 0; }
+      } else if (message.channel === 'trades') {
+        this.pendingTrades = mergeTrades(this.pendingTrades, parseTrades(message.data, this.coin));
+        this.sawTrades = true;
+      } else if (message.channel === 'candle') {
+        const candles = parseCandles(message.data, this.coin);
+        this.pendingCandles = mergeCandles(this.pendingCandles, candles);
+        if (this.liveDuringHistory !== null) {
+          this.liveDuringHistory = mergeCandles(this.liveDuringHistory, candles);
+        }
+      } else return;
+      this.scheduleFlush();
+    };
+  }
+
+  private reconnect() {
+    if (!this.active) return;
+    ++this.generation;
+    this.cleanConnection();
+    this.clearPending();
+    clearTimeout(this.retryTimer);
+    this.store.setState(state => ({ connection: navigator.onLine === false ? 'offline' : 'reconnecting',
+      reconnects: state.reconnects + 1, historyLoading: false }));
+    const delay = Math.min(1000 * 2 ** this.failures++, 15_000) + this.deps.random() * 500;
+    this.retryTimer = setTimeout(() => this.connect(), delay);
+  }
+
+  private async loadHistory(generation: number) {
+    this.historyAbort?.abort();
+    const abort = this.historyAbort = new AbortController();
+    this.liveDuringHistory = [];
+    this.store.setState({ historyLoading: true, historyError: null });
+    const timeout = setTimeout(() => abort.abort(), 12_000);
+    try {
+      const history = await this.deps.history(this.coin, abort.signal);
+      if (!this.active || generation !== this.generation || this.store.getState().coin !== this.coin) return;
+      // Include live candles received since the request began, even if already flushed.
+      const merged = mergeCandles(history, this.liveDuringHistory ?? []);
+      const candles = mergeCandles(this.store.getState().candles, merged);
+      this.store.setState(state => ({ candles, historyLoading: false,
+        historyRevision: state.historyRevision + 1 }));
+    } catch {
+      if (this.active && generation === this.generation && this.store.getState().coin === this.coin) {
+        this.store.setState({ historyLoading: false,
+          historyError: 'History unavailable. Live candles continue; history retries on reconnection.' });
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (generation === this.generation) this.liveDuringHistory = null;
+    }
+  }
+
+  private scheduleFlush() {
+    if (this.frameId !== null) return;
+    this.frameId = this.deps.frame(() => {
+      this.frameId = null;
+      if (!this.active || this.store.getState().coin !== this.coin) return;
+      const current = this.store.getState();
+      const patch: Partial<MarketState> = {};
+      if (this.pendingBook) patch.book = this.pendingBook;
+      if (this.sawTrades) {
+        patch.tradesReceived = true;
+        if (this.pendingTrades.length) patch.trades = mergeTrades(current.trades, this.pendingTrades);
+      }
+      if (this.pendingCandles.length) patch.candles = mergeCandles(current.candles, this.pendingCandles);
+      this.pendingBook = null;
+      this.pendingTrades = [];
+      this.pendingCandles = [];
+      this.sawTrades = false;
+      if (Object.keys(patch).length) this.store.setState(patch);
+    });
+  }
+}
