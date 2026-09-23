@@ -9,6 +9,7 @@ export interface MarketState {
   book: Book | null;
   trades: Trade[];
   tradesReceived: boolean;
+  rejectedTradeIds: number;
   candles: Candle[];
   historyLoading: boolean;
   historyError: string | null;
@@ -18,7 +19,7 @@ export interface MarketState {
 }
 export const createMarketStore = () => createStore<MarketState>(() => ({
   markets: [], marketError: null, coin: '', connection: 'connecting',
-  book: null, trades: [], tradesReceived: false, candles: [],
+  book: null, trades: [], tradesReceived: false, rejectedTradeIds: 0, candles: [],
   historyLoading: true, historyError: null, historyRevision: 0,
   reconnects: 0, feedError: null,
 }));

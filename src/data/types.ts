@@ -2,7 +2,7 @@ export interface Market { name: string; sizeDecimals: number }
 export interface Level { price: number; size: number; cumulative: number }
 export interface Book { time: number; bids: Level[]; asks: Level[] }
 export interface Trade {
-  id: string; time: number; price: number; size: number; side: 'buy' | 'sell';
+  id: string; tid: number; time: number; price: number; size: number; side: 'buy' | 'sell';
 }
 export interface Candle {
   time: number; open: number; high: number; low: number; close: number;
@@ -40,14 +40,17 @@ export function parseBook(value: unknown, coin: string): Book | null {
   return bids && asks && time !== null ? { bids, asks, time } : null;
 }
 
-export function parseTrades(value: unknown, coin: string): Trade[] {
+export function parseTrades(value: unknown, coin: string, rejectedTid?: () => void): Trade[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap(item => {
     if (!record(item) || item.coin !== coin || !['A', 'B'].includes(String(item.side))) return [];
+    if (typeof item.tid !== 'number' || !Number.isSafeInteger(item.tid)) {
+      rejectedTid?.();
+      return [];
+    }
     const price = numeric(item.px), size = numeric(item.sz), time = numeric(item.time);
-    if (price === null || size === null || time === null || price <= 0 || size <= 0 ||
-        typeof item.tid !== 'number' || !Number.isSafeInteger(item.tid)) return [];
-    return [{ id: `${coin}:${time}:${item.tid}`, time, price, size,
+    if (price === null || size === null || time === null || price <= 0 || size <= 0) return [];
+    return [{ id: `${coin}:${time}:${item.tid}`, tid: item.tid, time, price, size,
       side: item.side === 'B' ? 'buy' as const : 'sell' as const }];
   });
 }
@@ -66,7 +69,7 @@ export function parseCandles(value: unknown, coin: string): Candle[] {
 export function mergeTrades(current: Trade[], incoming: Trade[]): Trade[] {
   const byId = new Map(current.map(trade => [trade.id, trade]));
   for (const trade of incoming) byId.set(trade.id, trade);
-  return [...byId.values()].sort((a, b) => b.time - a.time || b.id.localeCompare(a.id)).slice(0, 50);
+  return [...byId.values()].sort((a, b) => b.time - a.time || b.tid - a.tid).slice(0, 50);
 }
 
 /** Later input wins at a timestamp. Used to overlay buffered live data on history. */

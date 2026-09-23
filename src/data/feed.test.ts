@@ -18,19 +18,22 @@ class FakeSocket implements SocketLike {
 const book = (coin = 'BTC', time = 1) => ({ coin, time, levels: [
   [{ px: '100', sz: '2' }], [{ px: '101', sz: '3' }],
 ] });
-function setup(coin = 'BTC') {
+function setup(coin = 'BTC', random = () => 0) {
   const store = createMarketStore();
   const sockets: FakeSocket[] = [];
-  const historyCalls: { resolve: (value: Candle[]) => void; signal: AbortSignal }[] = [];
+  const historyCalls: { resolve: (value: Candle[]) => void; reject: (reason: Error) => void; signal: AbortSignal; coin: string }[] = [];
+  const events = new EventTarget();
+  const warn = vi.fn();
   const deps = {
     socket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket; },
-    history: (_coin: string, signal: AbortSignal) => new Promise<Candle[]>(resolve => historyCalls.push({ resolve, signal })),
+    history: (coin: string, signal: AbortSignal) => new Promise<Candle[]>((resolve, reject) => historyCalls.push({ resolve, reject, signal, coin })),
+    networkEvents: events, warn,
     frame: (callback: () => void) => setTimeout(callback, 16) as unknown as number,
-    cancelFrame: (id: number) => clearTimeout(id), random: () => 0,
+    cancelFrame: (id: number) => clearTimeout(id), random,
   };
   const feed = new MarketFeed(store, coin, deps);
   feed.start();
-  return { feed, store, sockets, historyCalls, deps };
+  return { feed, store, sockets, historyCalls, deps, events, warn };
 }
 
 describe('selected-market lifecycle', () => {
@@ -50,7 +53,7 @@ describe('selected-market lifecycle', () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(store.getState().book?.time).toBe(2);
     expect(store.getState().trades).toHaveLength(50);
-    expect(store.getState().trades[0].time).toBe(69);
+    expect(store.getState().trades.map(t => t.tid)).toEqual(Array.from({ length: 50 }, (_, i) => 69 - i));
     expect(store.getState().candles).toBe(originalCandles);
     const previousTrades = store.getState().trades;
     sockets[0].emit('l2Book', book('BTC', 3)); vi.advanceTimersByTime(16);
@@ -147,4 +150,165 @@ describe('selected-market lifecycle', () => {
     feed.dispose();
     expect(vi.getTimerCount()).toBe(0);
   });
+});
+
+
+describe('review regressions and checkpoint b', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  const candleWire = (t: number, c = '108') => ({ s: 'BTC', i: '1m', t, o: '100', h: '110', l: '99', c });
+  const bar = (time: number, close = 101): Candle => ({ time, open: 100, high: 110, low: 99, close });
+  const tradeWire = (tid: number) => ({ coin: 'BTC', tid, time: 1000, px: '100', sz: '1', side: 'B' });
+
+  it('handles offline immediately, online immediately, resets backoff and removes listeners on dispose', () => {
+    const { feed, sockets, store, events } = setup(); sockets[0].open();
+    sockets[0].onclose!(); vi.advanceTimersByTime(1000);
+    sockets[1].onclose!(); // Next delay would be 2s.
+    events.dispatchEvent(new Event('offline'));
+    expect(store.getState().connection).toBe('offline');
+    expect(sockets).toHaveLength(3);
+    events.dispatchEvent(new Event('online'));
+    expect(sockets[2].readyState).toBe(3);
+    expect(sockets).toHaveLength(4);
+    expect(store.getState().connection).toBe('reconnecting');
+    sockets[3].onclose!();
+    vi.advanceTimersByTime(999); expect(sockets).toHaveLength(4);
+    vi.advanceTimersByTime(1); expect(sockets).toHaveLength(5);
+    feed.dispose();
+    const state = store.getState();
+    events.dispatchEvent(new Event('offline')); events.dispatchEvent(new Event('online'));
+    vi.advanceTimersByTime(60_000);
+    expect(sockets).toHaveLength(5); expect(store.getState()).toBe(state);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retries history once at 5s while live, then waits for a new connection', async () => {
+    const { feed, sockets, historyCalls, store } = setup(); sockets[0].open();
+    historyCalls[0].reject(new Error('REST failed')); await Promise.resolve();
+    expect(store.getState().historyError).toContain('5 seconds');
+    vi.advanceTimersByTime(4999); expect(historyCalls).toHaveLength(1);
+    vi.advanceTimersByTime(1); expect(historyCalls).toHaveLength(2);
+    historyCalls[1].reject(new Error('REST failed again')); await Promise.resolve();
+    vi.advanceTimersByTime(5000); expect(historyCalls).toHaveLength(2);
+    expect(sockets).toHaveLength(1); expect(store.getState().connection).toBe('live');
+    expect(store.getState().historyError).toContain('reconnection');
+    feed.dispose(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cancels a scheduled history retry on reconnect and disposal', async () => {
+    const { feed, sockets, historyCalls } = setup(); sockets[0].open();
+    historyCalls[0].reject(new Error('failed')); await Promise.resolve();
+    sockets[0].onclose!(); vi.advanceTimersByTime(1000); sockets[1].open();
+    vi.advanceTimersByTime(4000); expect(historyCalls).toHaveLength(2);
+    historyCalls[1].reject(new Error('failed')); await Promise.resolve();
+    feed.dispose(); expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(6000); expect(historyCalls).toHaveLength(2);
+  });
+
+  it('counts and logs unsafe tids while retaining valid trades, including same-ms ordering', () => {
+    const { feed, sockets, store, warn } = setup(); sockets[0].open();
+    sockets[0].emit('trades', [tradeWire(9), tradeWire(Number.MAX_SAFE_INTEGER + 1), tradeWire(10)]);
+    sockets[0].emit('trades', [tradeWire(1.5)]);
+    vi.advanceTimersByTime(16);
+    expect(store.getState().trades.map(t => t.tid)).toEqual([10, 9]);
+    expect(store.getState().rejectedTradeIds).toBe(2);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith('[BTC] Rejected 1 trades: tid must be a safe integer.');
+    feed.dispose();
+  });
+
+  it('flushes pending trades and candles before reconnect, without waiting for a frame', () => {
+    const { feed, sockets, store } = setup(); sockets[0].open();
+    sockets[0].emit('trades', [tradeWire(9)]);
+    sockets[0].emit('trades', [tradeWire(10)]);
+    sockets[0].emit('candle', candleWire(60_000));
+    expect(store.getState().trades).toEqual([]);
+    sockets[0].onclose!();
+    expect(store.getState().trades.map(t => t.tid)).toEqual([10, 9]);
+    expect(store.getState().candles[0].close).toBe(108);
+    expect(store.getState().connection).toBe('reconnecting');
+    feed.dispose(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('never flushes a disposed or replaced market into the current market', () => {
+    const { feed, sockets, store, events } = setup(); sockets[0].open();
+    sockets[0].emit('trades', [tradeWire(9)]); sockets[0].emit('candle', candleWire(60_000));
+    store.setState({ coin: 'ETH' }); events.dispatchEvent(new Event('offline'));
+    vi.advanceTimersByTime(16);
+    expect(store.getState().trades).toEqual([]); expect(store.getState().candles).toEqual([]);
+    feed.dispose(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('preserves buffered live candles when REST resolves before the frame', async () => {
+    const { feed, sockets, store, historyCalls } = setup(); sockets[0].open();
+    sockets[0].emit('candle', candleWire(60_000));
+    historyCalls[0].resolve([bar(60)]); await Promise.resolve();
+    expect(store.getState().candles).toEqual([bar(60, 108)]);
+    vi.advanceTimersByTime(16); expect(store.getState().candles).toEqual([bar(60, 108)]);
+    feed.dispose();
+  });
+
+  it('backfills a reconnect candle gap and overlays new live data', async () => {
+    const { feed, sockets, store, historyCalls } = setup(); sockets[0].open();
+    historyCalls[0].resolve([bar(60)]); await Promise.resolve();
+    sockets[0].onclose!(); vi.advanceTimersByTime(1000); sockets[1].open();
+    sockets[1].emit('candle', candleWire(180_000)); vi.advanceTimersByTime(16);
+    historyCalls[1].resolve([bar(60), bar(120), bar(180)]); await Promise.resolve();
+    expect(store.getState().candles).toEqual([bar(60), bar(120), bar(180, 108)]);
+    expect(historyCalls.map(h => h.coin)).toEqual(['BTC', 'BTC']);
+    feed.dispose();
+  });
+
+  it('retains populated final A through A to B to A and rejects obsolete retry responses', async () => {
+    const first = setup(); first.sockets[0].open();
+    first.historyCalls[0].reject(new Error('failed')); await Promise.resolve();
+    vi.advanceTimersByTime(5000); // retry in flight
+    const staleMessage = first.sockets[0].onmessage!;
+    first.feed.dispose();
+    const eth = new MarketFeed(first.store, 'ETH', first.deps); eth.start(); first.sockets[1].open(); eth.dispose();
+    const btc = new MarketFeed(first.store, 'BTC', first.deps); btc.start(); first.sockets[2].open();
+    expect(first.sockets[2].sent).toEqual(['l2Book', 'trades', 'candle'].map(type => ({
+      method: 'subscribe', subscription: { type, coin: 'BTC', ...(type === 'candle' ? { interval: '1m' } : {}) },
+    })));
+    first.sockets[2].emit('l2Book', book('BTC', 30));
+    first.sockets[2].emit('trades', [tradeWire(10)]);
+    first.historyCalls[3].resolve([bar(180)]); await Promise.resolve(); vi.advanceTimersByTime(16);
+    staleMessage({ data: JSON.stringify({ channel: 'l2Book', data: book('BTC', 999) }) });
+    staleMessage({ data: JSON.stringify({ channel: 'trades', data: [tradeWire(99)] }) });
+    first.historyCalls[1].resolve([bar(60)]); first.historyCalls[2].resolve([bar(120)]);
+    await Promise.resolve(); vi.advanceTimersByTime(16);
+    expect(first.store.getState().book?.time).toBe(30);
+    expect(first.store.getState().trades.map(t => t.tid)).toEqual([10]);
+    expect(first.store.getState().candles).toEqual([bar(180)]);
+    btc.dispose(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retries without a maximum attempt count but caps delay including jitter at 15s', () => {
+    const { feed, sockets } = setup('BTC', () => 0.8);
+    for (const delay of [1400, 2400, 4400, 8400, 15000, 15000, 15000]) {
+      const count = sockets.length;
+      sockets.at(-1)!.onclose!();
+      vi.advanceTimersByTime(delay - 1); expect(sockets).toHaveLength(count);
+      vi.advanceTimersByTime(1); expect(sockets).toHaveLength(count + 1);
+    }
+    sockets.at(-1)!.onclose!(); feed.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(120_000); expect(sockets).toHaveLength(8);
+  });
+});
+
+
+it('a successful history retry preserves a live candle that arrives while retrying', async () => {
+  vi.useFakeTimers();
+  const { feed, sockets, historyCalls, store } = setup();
+  try {
+    sockets[0].open(); historyCalls[0].reject(new Error('failed')); await Promise.resolve();
+    vi.advanceTimersByTime(5000);
+    sockets[0].emit('candle', { s: 'BTC', i: '1m', t: 60_000, o: '100', h: '110', l: '99', c: '108' });
+    historyCalls[1].resolve([{ time: 60, open: 100, high: 102, low: 99, close: 101 }]);
+    await Promise.resolve(); vi.advanceTimersByTime(16);
+    expect(store.getState().candles[0].close).toBe(108);
+    expect(store.getState().historyLoading).toBe(false);
+    expect(store.getState().historyError).toBeNull();
+  } finally { feed.dispose(); vi.useRealTimers(); }
 });

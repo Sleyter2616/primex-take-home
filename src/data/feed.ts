@@ -18,6 +18,8 @@ interface Dependencies {
   frame: (callback: () => void) => number;
   cancelFrame: (id: number) => void;
   random: () => number;
+  networkEvents: EventTarget | null;
+  warn: (message: string) => void;
 }
 const defaults: Dependencies = {
   socket: () => new WebSocket(WS_URL) as unknown as SocketLike,
@@ -25,6 +27,8 @@ const defaults: Dependencies = {
   frame: callback => requestAnimationFrame(callback),
   cancelFrame: id => cancelAnimationFrame(id),
   random: Math.random,
+  networkEvents: typeof window === 'undefined' ? null : window,
+  warn: message => console.warn(message),
 };
 
 /** One selected-market session. Stop invalidates every socket, timer and REST callback. */
@@ -38,6 +42,8 @@ export class MarketFeed {
   private connectionTimer?: ReturnType<typeof setTimeout>;
   private historyAbort?: AbortController;
   private historyTimer?: ReturnType<typeof setTimeout>;
+  private historyRetryTimer?: ReturnType<typeof setTimeout>;
+  private offline = false;
   private failures = 0;
   private lastMessage = 0;
   private frameId: number | null = null;
@@ -51,17 +57,33 @@ export class MarketFeed {
     this.deps = { ...defaults, ...deps };
   }
 
+  private onOffline = () => {
+    this.offline = true;
+    this.reconnect(true);
+  };
+
+  private onOnline = () => {
+    this.offline = false;
+    this.failures = 0;
+    this.reconnect(true);
+  };
+
   start() {
     if (this.active) return;
     this.active = true;
+    this.offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    this.deps.networkEvents?.addEventListener('offline', this.onOffline);
+    this.deps.networkEvents?.addEventListener('online', this.onOnline);
     this.store.setState({ coin: this.coin, connection: 'connecting', book: null,
-      trades: [], tradesReceived: false, candles: [], historyLoading: true,
+      trades: [], tradesReceived: false, rejectedTradeIds: 0, candles: [], historyLoading: true,
       historyError: null, historyRevision: 0, reconnects: 0, feedError: null });
     this.connect();
   }
 
   stop() {
     this.active = false;
+    this.deps.networkEvents?.removeEventListener('offline', this.onOffline);
+    this.deps.networkEvents?.removeEventListener('online', this.onOnline);
     this.generation++;
     this.cleanConnection();
     clearTimeout(this.retryTimer);
@@ -79,6 +101,7 @@ export class MarketFeed {
     clearInterval(this.heartbeat);
     clearTimeout(this.connectionTimer);
     clearTimeout(this.historyTimer);
+    clearTimeout(this.historyRetryTimer);
     this.historyAbort?.abort();
     this.liveDuringHistory = null;
     const socket = this.socket;
@@ -145,7 +168,13 @@ export class MarketFeed {
         const previousTime = this.pendingBook?.time ?? this.store.getState().book?.time ?? 0;
         if (book && book.time >= previousTime) { this.pendingBook = book; this.failures = 0; }
       } else if (message.channel === 'trades') {
-        this.pendingTrades = mergeTrades(this.pendingTrades, parseTrades(message.data, this.coin));
+        let rejected = 0;
+        const trades = parseTrades(message.data, this.coin, () => rejected++);
+        if (rejected) {
+          this.store.setState(state => ({ rejectedTradeIds: state.rejectedTradeIds + rejected }));
+          this.deps.warn(`[${this.coin}] Rejected ${rejected} trades: tid must be a safe integer.`);
+        }
+        this.pendingTrades = mergeTrades(this.pendingTrades, trades);
         this.sawTrades = true;
       } else if (message.channel === 'candle') {
         const candles = parseCandles(message.data, this.coin);
@@ -158,19 +187,21 @@ export class MarketFeed {
     };
   }
 
-  private reconnect() {
+  private reconnect(immediate = false) {
     if (!this.active || this.store.getState().coin !== this.coin) return;
+    this.flushPending();
     ++this.generation;
     this.cleanConnection();
     this.clearPending();
     clearTimeout(this.retryTimer);
-    this.store.setState(state => ({ connection: navigator.onLine === false ? 'offline' : 'reconnecting',
+    this.store.setState(state => ({ connection: this.offline ? 'offline' : 'reconnecting',
       reconnects: state.reconnects + 1, historyLoading: false }));
-    const delay = Math.min(1000 * 2 ** this.failures++, 15_000) + this.deps.random() * 500;
+    if (immediate) { this.connect(); return; }
+    const delay = Math.min(1000 * 2 ** this.failures++ + this.deps.random() * 500, 15_000);
     this.retryTimer = setTimeout(() => this.connect(), delay);
   }
 
-  private async loadHistory(generation: number) {
+  private async loadHistory(generation: number, retried = false) {
     this.historyAbort?.abort();
     const abort = this.historyAbort = new AbortController();
     this.liveDuringHistory = [];
@@ -188,7 +219,14 @@ export class MarketFeed {
     } catch {
       if (this.active && generation === this.generation && this.store.getState().coin === this.coin) {
         this.store.setState({ historyLoading: false,
-          historyError: 'History unavailable. Live candles continue; history retries on reconnection.' });
+          historyError: retried ? 'History unavailable. Live candles continue; history retries on reconnection.'
+            : 'History unavailable. Live candles continue; retrying in 5 seconds.' });
+        if (!retried && this.socket?.readyState === 1) {
+          this.historyRetryTimer = setTimeout(() => {
+            if (this.active && this.generation === generation && this.store.getState().coin === this.coin
+                && this.socket?.readyState === 1) void this.loadHistory(generation, true);
+          }, 5_000);
+        }
       }
     } finally {
       clearTimeout(timeout);
@@ -198,22 +236,28 @@ export class MarketFeed {
 
   private scheduleFlush() {
     if (this.frameId !== null) return;
+    const generation = this.generation;
     this.frameId = this.deps.frame(() => {
-      this.frameId = null;
-      if (!this.active || this.store.getState().coin !== this.coin) return;
-      const current = this.store.getState();
-      const patch: Partial<MarketState> = {};
-      if (this.pendingBook) patch.book = this.pendingBook;
-      if (this.sawTrades) {
-        patch.tradesReceived = true;
-        if (this.pendingTrades.length) patch.trades = mergeTrades(current.trades, this.pendingTrades);
-      }
-      if (this.pendingCandles.length) patch.candles = mergeCandles(current.candles, this.pendingCandles);
-      this.pendingBook = null;
-      this.pendingTrades = [];
-      this.pendingCandles = [];
-      this.sawTrades = false;
-      if (Object.keys(patch).length) this.store.setState(patch);
+      if (this.generation === generation) this.flushPending();
     });
+  }
+
+  private flushPending() {
+    if (this.frameId !== null) this.deps.cancelFrame(this.frameId);
+    this.frameId = null;
+    if (!this.active || this.store.getState().coin !== this.coin) return;
+    const current = this.store.getState();
+    const patch: Partial<MarketState> = {};
+    if (this.pendingBook) patch.book = this.pendingBook;
+    if (this.sawTrades) {
+      patch.tradesReceived = true;
+      if (this.pendingTrades.length) patch.trades = mergeTrades(current.trades, this.pendingTrades);
+    }
+    if (this.pendingCandles.length) patch.candles = mergeCandles(current.candles, this.pendingCandles);
+    this.pendingBook = null;
+    this.pendingTrades = [];
+    this.pendingCandles = [];
+    this.sawTrades = false;
+    if (Object.keys(patch).length) this.store.setState(patch);
   }
 }

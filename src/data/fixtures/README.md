@@ -1,0 +1,1 @@
+Captured unchanged from wss://api.hyperliquid-testnet.xyz/ws on 2026-09-22, subscription {"type":"trades","coin":"BTC"}. Source: work/testnet-ws-sample.jsonl from the initial live API probe. Contains the complete first trades message, including public on-chain addresses. No private credentials.

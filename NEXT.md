@@ -1,6 +1,6 @@
 # Resume checkpoint: 2026-09-23
 
-Stopped after checkpoint **a**, as requested. Checkpoints b and c are pending.
+Stopped after checkpoint **b**, as requested. Checkpoint c is pending.
 
 ## Completed
 
@@ -13,13 +13,11 @@ Stopped after checkpoint **a**, as requested. Checkpoints b and c are pending.
 - Added regression tests for disposal with never-settling history, obsolete retry ownership and subscription-send failures.
 - Verification after a: 14 tests pass; explicit typecheck and production build pass.
 
-## Next: checkpoint b
+## Checkpoint b completed
 
-1. Expand pure trade tests with deliberately scrambled input and duplicates both within and across batches. Assert complete retained identities, not just endpoints/counts.
-2. Add delayed-history race before the animation-frame flush, and a reconnect-gap backfill test with live overlay.
-3. Strengthen A → B → A test to open and populate the final current socket while injecting obsolete callbacks. Verify current subscriptions contain only the current coin.
-4. Test backoff cap across repeated failures and dispose while a reconnect timer is pending; assert no remaining timers.
-5. Run tests, typecheck and build, commit checkpoint b, then stop and report.
+- Addressed all six review findings: network events, numeric tid tie-break, one-shot history retry, rejected-ID count/log plus real fixture, reconnect buffer flush, and documented unbounded retries capped at 15 seconds including jitter.
+- Added scrambled/overlapping trade input checks with exact retained identities, REST-before-frame and reconnect-gap candle tests, populated A → B → A with obsolete retry response rejection, and capped-backoff/disposal tests.
+- 29 tests, explicit typecheck and production build pass. No browser performance evidence collected at this checkpoint.
 
 ## Then: checkpoint c
 
@@ -30,7 +28,7 @@ Stopped after checkpoint **a**, as requested. Checkpoints b and c are pending.
 
 ## Unverified / limitations
 
-- No new browser run after checkpoint a. Prior session verified live BTC, ETH and SOL with no captured console warnings/errors.
+- No new browser run after checkpoints a/b. Prior session verified live BTC, ETH and SOL with no captured console warnings/errors.
 - No React render-count measurements yet. Existing README architecture wording describes the intended isolation, not measured evidence.
 - Candle revision `n` is not treated as a protocol sequence number. Same-minute out-of-order live revisions remain a documented limitation; confirm a server ordering contract before adding heuristics.
 - Reconnect fills only the retained history window, not arbitrary-duration gaps. Trade replay is not guaranteed.

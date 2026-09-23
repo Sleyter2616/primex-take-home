@@ -1,3 +1,4 @@
+import fixture from './fixtures/trades-btc-2026-09-22.json';
 import { describe, expect, it } from 'vitest';
 import { mergeCandles, mergeTrades, parseBook, parseCandles, parseTrades } from './types';
 
@@ -39,5 +40,41 @@ describe('feed transformations', () => {
     const live = parseCandles(candle(120_000, '14'), 'BTC');
     expect(mergeCandles(history, live).map(x => [x.time, x.close])).toEqual([[60, 12], [120, 14]]);
     expect(mergeCandles([], Array.from({ length: 500 }, (_, i) => ({ time: i, open: 1, high: 1, low: 1, close: 1 })))).toHaveLength(300);
+  });
+});
+
+
+describe('trade ordering and captured protocol', () => {
+  it('orders same-ms tids numerically, independent of input and batch order', () => {
+    const nine = { ...trade(9), time: 1000 }, ten = { ...trade(10), time: 1000 };
+    for (const input of [[nine, ten], [ten, nine]]) {
+      expect(mergeTrades([], parseTrades(input, 'BTC')).map(t => t.tid)).toEqual([10, 9]);
+    }
+    expect(mergeTrades(parseTrades([ten], 'BTC'), parseTrades([nine, ten], 'BTC')).map(t => t.tid)).toEqual([10, 9]);
+  });
+
+  it('retains exactly the newest 50 unique identities from scrambled overlapping batches', () => {
+    const all = Array.from({ length: 80 }, (_, i) => trade((i * 37) % 80));
+    const first = parseTrades([...all.slice(0, 60), all[5], all[5]], 'BTC');
+    const second = parseTrades([...all.slice(20), all[30], all[30]], 'BTC');
+    expect(mergeTrades(mergeTrades([], first), second).map(t => t.id))
+      .toEqual(Array.from({ length: 50 }, (_, i) => `BTC:${(79 - i) * 1000}:${79 - i}`));
+  });
+
+  it('parses every trade in the real captured message and preserves numeric identity', () => {
+    let rejected = 0;
+    const parsed = parseTrades(fixture.data, 'BTC', () => rejected++);
+    expect(parsed).toHaveLength(fixture.data.length);
+    expect(parsed[0]).toEqual({ id: 'BTC:1790128583573:628379693827841',
+      tid: 628379693827841, time: 1790128583573, price: 86951, size: 0.00212, side: 'buy' });
+    expect(rejected).toBe(0);
+  });
+
+  it('reports unsafe, fractional and non-numeric tids without rejecting valid peers', () => {
+    let rejected = 0;
+    const data = [trade(9), ...[Number.MAX_SAFE_INTEGER + 1, 1.5, '10', undefined]
+      .map(tid => ({ ...trade(10), tid }))];
+    expect(parseTrades(data, 'BTC', () => rejected++).map(t => t.tid)).toEqual([9]);
+    expect(rejected).toBe(4);
   });
 });
