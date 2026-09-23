@@ -5,6 +5,7 @@ import { MarketFeed } from '../data/feed';
 import { marketStore } from '../data/store';
 import type { Level, Trade } from '../data/types';
 import { PriceChart } from './Chart';
+import { ProfileControls, profilePanel } from './profile';
 import { price, size, time } from './format';
 
 function FeedLifecycle() {
@@ -63,12 +64,13 @@ function ConnectionStatus() {
 }
 
 function MarketSummary() {
+  const stale = useStore(marketStore, state => state.connection !== 'live');
   const mid = useStore(marketStore, state => state.book?.bids[0] && state.book?.asks[0]
     ? (state.book.bids[0].price + state.book.asks[0].price) / 2 : null);
   const bestBid = useStore(marketStore, state => state.book?.bids[0]?.price);
   const bestAsk = useStore(marketStore, state => state.book?.asks[0]?.price);
-  return <div className="market-stats">
-    <div className="stat primary"><span>Mid price</span><strong>{mid ? price(mid) : '—'}</strong></div>
+  return <div className={`market-stats ${stale ? 'stale' : ''}`} aria-label={stale ? 'Market summary, stale' : 'Market summary'}>
+    <div className="stat primary"><span>Mid price{stale ? ' · stale' : ''}</span><strong>{mid ? price(mid) : '—'}</strong></div>
     <div className="stat"><span>Best bid</span><strong className="buy">{bestBid ? price(bestBid) : '—'}</strong></div>
     <div className="stat"><span>Best ask</span><strong className="sell">{bestAsk ? price(bestAsk) : '—'}</strong></div>
     <div className="stat"><span>Spread</span><strong>{bestBid && bestAsk ? price(bestAsk - bestBid) : '—'} <small>USD</small></strong></div>
@@ -149,14 +151,21 @@ function FooterClock() {
 export function App() {
   return <div className="terminal">
     <FeedLifecycle />
-    <header className="topbar"><a className="brand" href="/" aria-label="Market terminal home"><span className="brand-mark">≋</span> PERP<span className="brand-divider">/</span><span className="brand-sub">TERMINAL</span></a>
+    {import.meta.env.DEV && <ProfileControls />}
+    {import.meta.env.DEV ? profilePanel('Header/ConnectionStatus', (
+      <header className="topbar"><a className="brand" href="/" aria-label="Market terminal home"><span className="brand-mark">≋</span> PERP<span className="brand-divider">/</span><span className="brand-sub">TERMINAL</span></a>
       <div className="topbar-right"><span className="network-tag">TESTNET</span><a href="https://app.hyperliquid-testnet.xyz/trade" target="_blank" rel="noreferrer">Hyperliquid ↗</a></div>
     </header>
+    )) : (
+      <header className="topbar"><a className="brand" href="/" aria-label="Market terminal home"><span className="brand-mark">≋</span> PERP<span className="brand-divider">/</span><span className="brand-sub">TERMINAL</span></a>
+      <div className="topbar-right"><span className="network-tag">TESTNET</span><a href="https://app.hyperliquid-testnet.xyz/trade" target="_blank" rel="noreferrer">Hyperliquid ↗</a></div>
+    </header>
+    )}
     <main>
       <div className="workspace-heading"><div><span className="eyebrow">MARKET OVERVIEW</span><h1>A live view of the market.</h1></div>
-        <ConnectionStatus /></div>
-      <div className="market-bar"><MarketSelector /><MarketSummary /></div>
-      <div className="workspace"><div className="main-column"><PriceChart /><TradesTape /></div><OrderBook /></div>
+        {import.meta.env.DEV ? profilePanel('Header/ConnectionStatus', <ConnectionStatus />) : <ConnectionStatus />}</div>
+      <div className="market-bar">{import.meta.env.DEV ? profilePanel('MarketSelector', <MarketSelector />) : <MarketSelector />}{import.meta.env.DEV ? profilePanel('MarketSummary', <MarketSummary />) : <MarketSummary />}</div>
+      <div className="workspace"><div className="main-column">{import.meta.env.DEV ? profilePanel('PriceChart', <PriceChart />) : <PriceChart />}{import.meta.env.DEV ? profilePanel('TradesTape', <TradesTape />) : <TradesTape />}</div>{import.meta.env.DEV ? profilePanel('OrderBook', <OrderBook />) : <OrderBook />}</div>
     </main>
     <footer><div><span className="footer-dot" />Hyperliquid testnet <span className="footer-divider">/</span> Market data only. No trading.</div><FooterClock /></footer>
   </div>;

@@ -2,12 +2,14 @@ import { useEffect, useRef } from 'react';
 import { useStore } from 'zustand';
 import { CandlestickSeries, ColorType, createChart, CrosshairMode,
   type CandlestickData, type UTCTimestamp } from 'lightweight-charts';
+import { metric } from './profile';
 import { marketStore } from '../data/store';
 import type { Candle } from '../data/types';
 
 const bar = (candle: Candle): CandlestickData => ({ ...candle, time: candle.time as UTCTimestamp });
 
 export function PriceChart() {
+  const stale = useStore(marketStore, state => state.connection !== 'live');
   const container = useRef<HTMLDivElement>(null);
   const loading = useStore(marketStore, state => state.historyLoading);
   const error = useStore(marketStore, state => state.historyError);
@@ -35,6 +37,7 @@ export function PriceChart() {
     const update = (state: ReturnType<typeof marketStore.getState>) => {
       if (state.coin !== lastCoin) {
         lastCoin = state.coin; previous = []; fitted = false; revision = -1;
+        if (import.meta.env.DEV) metric('seriesSetData');
         series.setData([]);
         const sizeDecimals = state.markets.find(market => market.name === state.coin)?.sizeDecimals ?? 0;
         const precision = Math.max(2, 6 - sizeDecimals);
@@ -44,6 +47,7 @@ export function PriceChart() {
       const historyChanged = state.historyRevision !== revision;
       const windowMoved = previous.length > 0 && state.candles[0]?.time !== previous[0].time;
       if (historyChanged || !previous.length || windowMoved) {
+        if (import.meta.env.DEV) metric('seriesSetData');
         series.setData(state.candles.map(bar));
       } else {
         // Existing bars are immutable: only changed/new bars go to the chart API.
@@ -51,6 +55,7 @@ export function PriceChart() {
         const previousLastTime = previous[previous.length - 1]?.time ?? 0;
         for (const candle of state.candles) {
           if (old.get(candle.time) !== candle) {
+            if (import.meta.env.DEV) metric('seriesUpdate');
             series.update(bar(candle), candle.time < previousLastTime);
           }
         }
@@ -74,8 +79,8 @@ export function PriceChart() {
       <div className="chart-canvas" ref={container} />
       {empty && <div className="chart-empty">{loading ? 'Loading candle history…' : 'Waiting for the first candle'}</div>}
     </div>
-    <div className={`chart-caption ${error ? 'warning' : ''}`}>
-      {error || (loading && !empty ? 'Refreshing history… live updates continue.' : 'Scroll to zoom · drag to explore')}
+    <div className={`chart-caption ${error ? 'warning' : ''} ${stale ? 'stale' : ''}`}>
+      <span>{stale && 'Stale · connection unavailable. '}{error || (loading && !empty ? 'Refreshing history… live updates continue.' : 'Scroll to zoom · drag to explore')}</span>
       <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">Charts by TradingView</a>
     </div>
   </section>;

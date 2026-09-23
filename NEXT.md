@@ -1,6 +1,20 @@
 # Resume checkpoint: 2026-09-23
 
-Stopped after checkpoint **b**, as requested. Checkpoint c is pending.
+Checkpoint **b** committed (`6a8c5d9`). Checkpoint **c** was started and paused on 2026-09-23; the partial work is saved in the next `wip:` commit. Implementation continues in Claude Code from here.
+
+## Checkpoint c: state at pause (2026-09-23)
+
+Done (uncommitted work captured in the wip commit):
+- Market summary and chart caption show a stale indication whenever the connection is not live.
+- `onopen` clears the offline flag; a regression test covers offline, reopen, then close going to `reconnecting`.
+- Dev-only render profiler (`src/ui/profile.tsx`): wraps each panel in `<Profiler>` when the page is opened with `?profile=1`, records a 60-second window of panel renders, book messages, trade batches and chart `update`/`setData` calls.
+- Verified on a clean install of this tree: 29 tests pass, typecheck and production build pass. Not verified in a browser.
+
+Open issues found at handoff:
+- The header and `ConnectionStatus` are both profiled under the id `Header/ConnectionStatus`, so their counts merge. The header JSX is duplicated across the DEV and non-DEV branches.
+- `src/data/feed.ts` imports `metric` from `src/ui/profile`, so the data layer now depends on the UI layer. Consider a neutral `src/perf` module.
+- No profiler run has been recorded yet, so no render-count numbers exist.
+
 
 ## Completed
 

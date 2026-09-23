@@ -167,6 +167,10 @@ describe('review regressions and checkpoint b', () => {
     events.dispatchEvent(new Event('offline'));
     expect(store.getState().connection).toBe('offline');
     expect(sockets).toHaveLength(3);
+    sockets[2].open();
+    expect(store.getState().connection).toBe('live');
+    sockets[2].onclose!();
+    expect(store.getState().connection).toBe('reconnecting'); // onopen cleared the offline flag.
     events.dispatchEvent(new Event('online'));
     expect(sockets[2].readyState).toBe(3);
     expect(sockets).toHaveLength(4);

@@ -1,3 +1,4 @@
+import { metric } from '../ui/profile';
 import { fetchHistory, WS_URL } from './api';
 import { mergeCandles, mergeTrades, parseBook, parseCandles, parseTrades, record,
   type Book, type Candle, type Trade } from './types';
@@ -137,6 +138,7 @@ export class MarketFeed {
     socket.onopen = () => {
       if (!current()) return;
       clearTimeout(this.connectionTimer);
+      this.offline = false;
       this.lastMessage = Date.now();
       this.store.setState({ connection: 'live', feedError: null });
       try {
@@ -162,6 +164,10 @@ export class MarketFeed {
         this.store.setState({ feedError: 'Testnet rejected a subscription. Reconnecting…' });
         this.reconnect();
         return;
+      }
+      if (import.meta.env.DEV) {
+        if (message.channel === 'l2Book') metric('bookMessages');
+        if (message.channel === 'trades') metric('tradeBatches');
       }
       if (message.channel === 'l2Book') {
         const book = parseBook(message.data, this.coin);
