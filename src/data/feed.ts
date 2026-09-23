@@ -37,6 +37,7 @@ export class MarketFeed {
   private heartbeat?: ReturnType<typeof setInterval>;
   private connectionTimer?: ReturnType<typeof setTimeout>;
   private historyAbort?: AbortController;
+  private historyTimer?: ReturnType<typeof setTimeout>;
   private failures = 0;
   private lastMessage = 0;
   private frameId: number | null = null;
@@ -67,6 +68,8 @@ export class MarketFeed {
     this.clearPending();
   }
 
+  dispose() { this.stop(); }
+
   private subscriptions() {
     return [ { type: 'l2Book', coin: this.coin }, { type: 'trades', coin: this.coin },
       { type: 'candle', coin: this.coin, interval: '1m' } ];
@@ -75,6 +78,7 @@ export class MarketFeed {
   private cleanConnection() {
     clearInterval(this.heartbeat);
     clearTimeout(this.connectionTimer);
+    clearTimeout(this.historyTimer);
     this.historyAbort?.abort();
     this.liveDuringHistory = null;
     const socket = this.socket;
@@ -100,7 +104,7 @@ export class MarketFeed {
   }
 
   private connect() {
-    if (!this.active) return;
+    if (!this.active || this.store.getState().coin !== this.coin) return;
     const generation = ++this.generation;
     const current = () => this.active && this.generation === generation && this.store.getState().coin === this.coin;
     let socket: SocketLike;
@@ -112,9 +116,11 @@ export class MarketFeed {
       clearTimeout(this.connectionTimer);
       this.lastMessage = Date.now();
       this.store.setState({ connection: 'live', feedError: null });
-      for (const subscription of this.subscriptions()) {
-        socket.send(JSON.stringify({ method: 'subscribe', subscription }));
-      }
+      try {
+        for (const subscription of this.subscriptions()) {
+          socket.send(JSON.stringify({ method: 'subscribe', subscription }));
+        }
+      } catch { this.reconnect(); return; }
       this.loadHistory(generation);
       this.heartbeat = setInterval(() => {
         if (!current()) return;
@@ -153,7 +159,7 @@ export class MarketFeed {
   }
 
   private reconnect() {
-    if (!this.active) return;
+    if (!this.active || this.store.getState().coin !== this.coin) return;
     ++this.generation;
     this.cleanConnection();
     this.clearPending();
@@ -169,7 +175,8 @@ export class MarketFeed {
     const abort = this.historyAbort = new AbortController();
     this.liveDuringHistory = [];
     this.store.setState({ historyLoading: true, historyError: null });
-    const timeout = setTimeout(() => abort.abort(), 12_000);
+    clearTimeout(this.historyTimer);
+    const timeout = this.historyTimer = setTimeout(() => abort.abort(), 12_000);
     try {
       const history = await this.deps.history(this.coin, abort.signal);
       if (!this.active || generation !== this.generation || this.store.getState().coin !== this.coin) return;

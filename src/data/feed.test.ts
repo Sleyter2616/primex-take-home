@@ -117,4 +117,34 @@ describe('selected-market lifecycle', () => {
     expect(store.getState()).toBe(state);
     expect(sockets[0].sent.filter(item => (item as { method: string }).method === 'unsubscribe')).toHaveLength(3);
   });
+
+  it('dispose clears every timer even when the history promise never settles', () => {
+    const { feed, sockets, historyCalls } = setup(); sockets[0].open();
+    sockets[0].emit('l2Book', book());
+    feed.dispose();
+    expect(historyCalls[0].signal.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(120_000);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('does not reconnect an obsolete session after the selected coin changes', () => {
+    const { feed, sockets, store } = setup(); sockets[0].open();
+    sockets[0].onclose!();
+    store.setState({ coin: 'ETH' });
+    vi.advanceTimersByTime(1000);
+    expect(sockets).toHaveLength(1);
+    feed.dispose();
+  });
+
+  it('retries a failed subscription send without leaking a heartbeat or history request', () => {
+    const { feed, sockets, historyCalls, store } = setup();
+    sockets[0].send = () => { throw new Error('connection closed'); };
+    sockets[0].open();
+    expect(store.getState().connection).toBe('reconnecting');
+    expect(historyCalls).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(1);
+    feed.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

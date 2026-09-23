@@ -1,0 +1,37 @@
+# Resume checkpoint: 2026-09-23
+
+Stopped after checkpoint **a**, as requested. Checkpoints b and c are pending.
+
+## Completed
+
+- Local Mac repository initialized; pre-resume snapshot: `7bb5d78`.
+- Baseline: 11 tests, TypeScript and build passed.
+- Reviewed all 12 requirements and printed the pre-edit report and real payload excerpts in chat.
+- Fresh testnet metadata confirms BTC, ETH and SOL. Fresh one-minute candleSnapshot returned valid candles. Saved WebSocket payloads from September 22 verify `tid`, full book snapshots, and object-shaped candle messages.
+- Installed Lightweight Charts 5.2.1; using `addSeries(CandlestickSeries, ...)`.
+- Checkpoint a: history timeout explicitly cleared on disposal, reconnect guarded by ownership, subscription-send exceptions reconnect cleanly, `dispose()` exposed and used by React cleanup, subscription errors shown inline.
+- Added regression tests for disposal with never-settling history, obsolete retry ownership and subscription-send failures.
+- Verification after a: 14 tests pass; explicit typecheck and production build pass.
+
+## Next: checkpoint b
+
+1. Expand pure trade tests with deliberately scrambled input and duplicates both within and across batches. Assert complete retained identities, not just endpoints/counts.
+2. Add delayed-history race before the animation-frame flush, and a reconnect-gap backfill test with live overlay.
+3. Strengthen A → B → A test to open and populate the final current socket while injecting obsolete callbacks. Verify current subscriptions contain only the current coin.
+4. Test backoff cap across repeated failures and dispose while a reconnect timer is pending; assert no remaining timers.
+5. Run tests, typecheck and build, commit checkpoint b, then stop and report.
+
+## Then: checkpoint c
+
+1. Add explicit chart/summary stale indications and audit visible loading, empty and error states. Inspect responsive behavior in a browser.
+2. Record real React Profiler or console render-count observations with an explicit methodology. Store-reference tests alone do not prove render isolation. Do not claim a frame-rate benchmark without measuring it.
+3. Update README with measured observations, exact reconnect history window (200 minutes), no guaranteed trade replay, and remaining limitations. Refresh one-command run and architecture notes.
+4. Run tests, typecheck and build; commit checkpoint c; stop and report.
+
+## Unverified / limitations
+
+- No new browser run after checkpoint a. Prior session verified live BTC, ETH and SOL with no captured console warnings/errors.
+- No React render-count measurements yet. Existing README architecture wording describes the intended isolation, not measured evidence.
+- Candle revision `n` is not treated as a protocol sequence number. Same-minute out-of-order live revisions remain a documented limitation; confirm a server ordering contract before adding heuristics.
+- Reconnect fills only the retained history window, not arbitrary-duration gaps. Trade replay is not guaranteed.
+- No Git remote configured; code is durable on the user's Mac and available to a local Claude reviewer. No deployment or submission performed.

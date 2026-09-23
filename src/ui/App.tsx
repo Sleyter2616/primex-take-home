@@ -13,7 +13,7 @@ function FeedLifecycle() {
     if (!coin) return;
     const feed = new MarketFeed(marketStore, coin);
     feed.start();
-    return () => feed.stop();
+    return () => feed.dispose();
   }, [coin]);
   return null;
 }
@@ -58,7 +58,7 @@ function ConnectionStatus() {
   const error = useStore(marketStore, state => state.feedError);
   const labels = { live: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting', offline: 'Offline' };
   return <div className={`connection ${connection}`} role="status" title={error ?? 'Hyperliquid testnet WebSocket'}>
-    <span className="status-dot" />{labels[connection]}
+    <span className="status-dot" />{error ? `Error · ${error}` : labels[connection]}
   </div>;
 }
 
