@@ -5,7 +5,7 @@ Checkpoint **c** is complete (commit `feat: complete checkpoint c`). Next: revie
 ## Checkpoint c completed (2026-09-23, Claude Code)
 
 - Profiler counters moved to `src/perf/metrics.ts` (no React import); `feed.ts` no longer imports from `src/ui`.
-- `Header` and `ConnectionStatus` are profiled under separate ids; the duplicated DEV/non-DEV header JSX and per-panel ternaries are gone. The production bundle contains no profiler strings.
+- `Header` and `ConnectionStatus` are profiled under separate ids; the duplicated DEV/non-DEV header JSX and per-panel ternaries are gone. `App` renders `ProfileControls` only when `profiling` is true, so the production bundle contains no profiler code (Sol review found an earlier stub; fixed).
 - Stale rule fixed: a panel is stale only when it shows retained data while not live (`staleLabel` in `store.ts`, 2 new tests). Before, empty panels said "stale" during every initial connect and market switch.
 - Phone layout fix: the PERP badge overlapped the mid price at 375 px; the picker no longer shrinks below its content.
 - Profiler runs recorded for BTC and ETH (60 s each); numbers, method and caveats are in README "Measured render counts". Testnet was quiet, so the runs show isolation, not throughput.

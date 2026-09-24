@@ -5,6 +5,7 @@ import { MarketFeed } from '../data/feed';
 import { marketStore, staleLabel } from '../data/store';
 import type { Level, Trade } from '../data/types';
 import { PriceChart } from './Chart';
+import { profiling } from '../perf/metrics';
 import { ProfileControls, profilePanel } from './profile';
 import { price, size, time } from './format';
 
@@ -151,7 +152,7 @@ function FooterClock() {
 export function App() {
   return <div className="terminal">
     <FeedLifecycle />
-    <ProfileControls />
+    {profiling && <ProfileControls />}
     {profilePanel('Header', <header className="topbar"><a className="brand" href="/" aria-label="Market terminal home"><span className="brand-mark">≋</span> PERP<span className="brand-divider">/</span><span className="brand-sub">TERMINAL</span></a>
       <div className="topbar-right"><span className="network-tag">TESTNET</span><a href="https://app.hyperliquid-testnet.xyz/trade" target="_blank" rel="noreferrer">Hyperliquid ↗</a></div>
     </header>)}

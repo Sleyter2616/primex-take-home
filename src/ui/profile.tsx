@@ -13,7 +13,6 @@ export function ProfileControls() {
   const [running, setRunning] = useState(false);
   const cleanup = useRef<() => void>(() => {});
   useEffect(() => () => cleanup.current(), []);
-  if (!profiling) return null;
   return <aside style={{ padding: 16, overflowWrap: 'anywhere' }}>
     <button disabled={running} onClick={() => {
       const run = startRecording([...panels, ...events], windowMs);
