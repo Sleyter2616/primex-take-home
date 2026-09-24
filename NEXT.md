@@ -8,9 +8,9 @@ Checkpoint **c** is complete (commit `feat: complete checkpoint c`). Next: revie
 - `Header` and `ConnectionStatus` are profiled under separate ids; the duplicated DEV/non-DEV header JSX and per-panel ternaries are gone. `App` renders `ProfileControls` only when `profiling` is true, so the production bundle contains no profiler code (Sol review found an earlier stub; fixed).
 - Stale rule fixed: a panel is stale only when it shows retained data while not live (`staleLabel` in `store.ts`, 2 new tests). Before, empty panels said "stale" during every initial connect and market switch.
 - Phone layout fix: the PERP badge overlapped the mid price at 375 px; the picker no longer shrinks below its content.
-- Profiler runs recorded for BTC and ETH (60 s each); numbers, method and caveats are in README "Measured render counts". Testnet was quiet, so the runs show isolation, not throughput.
+- Profiler runs recorded for BTC and ETH (60 s each); numbers, method and caveats are in `docs/VERIFICATION.md`. Testnet was quiet, so the runs show isolation, not throughput.
 - Browser-checked: market switch, simulated offline/online, 375/768/1280 widths, no console errors.
-- Verification gaps closed 2026-09-24 with a scripted headless Chrome run (54/54 checks, table in README Verification): markets failure and Retry, rapid and settled BTC/ETH/BTC, blocked candle history, real network offline and restore, switching while offline, phone layout in every error state. Fixed three error-state display bugs it found.
+- Verification gaps closed 2026-09-24 with a scripted headless Chrome run (54/54 checks, table now in `docs/VERIFICATION.md`): markets failure and Retry, rapid and settled BTC/ETH/BTC, blocked candle history, real network offline and restore, switching while offline, phone layout in every error state. Fixed three error-state display bugs it found.
 - README: Trade-offs section, 200-minute history window, no trade replay, limitations. 31 tests, typecheck and build pass.
 
 ## Failure-state pass (2026-09-24, Claude Code)
@@ -22,6 +22,11 @@ Checkpoint **c** is complete (commit `feat: complete checkpoint c`). Next: revie
 - Codex review of `028b7a6` (gpt-6-sol, medium) found two gaps, both fixed with per-panel freshness: a reconnect cleared stale labels before fresh data arrived (high), and the chart notice could call book and trades live before they delivered (medium). 37 tests; lifecycle script 64/64; profile re-recorded.
 - Re-review (gpt-6-sol, low) found timestamp ordering fragile and empty history marking candles fresh; freshness now uses a monotonic connection counter and ignores empty history. README row corrected. 38 tests; lifecycle 65/65; profile re-recorded.
 
+## README restructured (2026-09-24)
+
+- README cut from about 4,400 to about 1,100 words for reviewers: what it is, how to run it, how it works, failure behaviour, performance summary, testing, trade-offs table, limits, next steps.
+- All measurement methods, tables, raw results, exact failure wording, detailed trade-off reasoning and lifecycle details moved verbatim to `docs/VERIFICATION.md`.
+
 ## Deployed (2026-09-24)
 
 - Vercel project `hyperliquid-testnet-terminal` (account sleyter2616, Hobby). Live at https://hyperliquid-testnet-terminal.vercel.app from commit `ec985cd`; checked in a browser: connected to testnet, 158 markets, book, trades and candles, no console errors.
@@ -30,7 +35,7 @@ Checkpoint **c** is complete (commit `feat: complete checkpoint c`). Next: revie
 ## Synthetic load (2026-09-24, Claude Code)
 
 - `src/data/feed.load.test.ts` (4 synthetic burst tests in `npm test`) and `scripts/load-harness.mjs` (headless Chrome, generated data labelled on the page). No application code changed.
-- Results in README "Synthetic load": dev 18/18, production 14/14, production at 4x CPU 14/14. Newest book and newest 50 unique trades on screen after load and burst; DOM and heap flat; 0 PriceChart commits for 1,508 chart updates; no long tasks under sustained load.
+- Results in `docs/VERIFICATION.md` (Synthetic load): dev 18/18, production 14/14, production at 4x CPU 14/14. Newest book and newest 50 unique trades on screen after load and burst; DOM and heap flat; 0 PriceChart commits for 1,508 chart updates; no long tasks under sustained load.
 - Harness errors found and fixed before recording: baseline before warm-up, burst hidden from the long-task probe inside a DevTools evaluate, harness bookkeeping growing the heap.
 
 ## Checkpoint c: state at pause (history)
