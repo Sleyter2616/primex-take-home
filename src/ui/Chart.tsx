@@ -3,16 +3,17 @@ import { useStore } from 'zustand';
 import { CandlestickSeries, ColorType, createChart, CrosshairMode,
   type CandlestickData, type UTCTimestamp } from 'lightweight-charts';
 import { metric } from '../perf/metrics';
-import { marketStore, staleLabel } from '../data/store';
+import { isFresh, marketStore, staleLabel } from '../data/store';
 import { time } from './format';
 import type { Candle } from '../data/types';
 
 const bar = (candle: Candle): CandlestickData => ({ ...candle, time: candle.time as UTCTimestamp });
 
 export function PriceChart() {
-  const stale = useStore(marketStore, state => staleLabel(state.connection, state.candles.length > 0,
-    state.lastUpdateAt ? `${time(state.lastUpdateAt)} UTC` : undefined));
-  const live = useStore(marketStore, state => state.connection === 'live');
+  const stale = useStore(marketStore, state => staleLabel(state, state.candles.length > 0, state.candlesAt,
+    state.candlesAt ? `${time(state.candlesAt)} UTC` : undefined));
+  // Claim the book and trades are live only once both delivered on the current connection.
+  const live = useStore(marketStore, state => isFresh(state, state.bookAt) && isFresh(state, state.tradesAt));
   const retry = useStore(marketStore, state => state.historyRetry);
   const container = useRef<HTMLDivElement>(null);
   const loading = useStore(marketStore, state => state.historyLoading);

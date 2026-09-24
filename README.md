@@ -43,12 +43,13 @@ Each failure answers four questions for a trader: which market, whether the numb
 |---|---|---|
 | Market list request fails | `Could not load the market list. This does not retry automatically.` with **Retry**; badge `Waiting for markets`; chart `Waiting for market list` | Manual: Retry |
 | Socket drops | Badge `Reconnecting automatically`; panels with data say `Stale · reconnecting`, and the chart caption and order book footer add `last update HH:MM:SS UTC` | Automatic, backoff capped at 15 s |
+| Socket reconnected, a channel has not sent anything yet | That panel keeps its retained data and says `Stale · waiting for update` until its first message on the new socket | Automatic |
 | Browser offline | Badge `Offline · will reconnect`; same stale labels with `Stale · offline` | Automatic when the browser is back online |
-| Candle history fails, socket live | Notice over the chart: `Candle history unavailable. Retrying automatically in 5 seconds. Order book and trades are live.` | Automatic once |
+| Candle history fails, socket live | Notice over the chart: `Candle history unavailable. Retrying automatically in 5 seconds.` It adds `Order book and trades are live.` only when both have delivered on the current connection | Automatic once |
 | Automatic history retry also fails | `Candle history unavailable. Automatic retry failed. Order book and trades are live.` with **Retry** | Manual: Retry (repeatable) |
 | History failed and the socket then drops | `Candle history unavailable. It reloads automatically after reconnecting.` | Automatic on reconnect |
 
-Every panel heading names the coin (`Price chart / ETH`, `Recent trades / ETH`, `Order book / ETH`). A market switch clears the previous market's data at once, so numbers are never shown under another market's name. A panel is stale only when it shows retained data while the socket is not live; before its first data arrives it shows loading text instead. The last-update time is the wall-clock time the app last published live data, so it does not change while disconnected.
+Every panel heading names the coin (`Price chart / ETH`, `Recent trades / ETH`, `Order book / ETH`). A market switch clears the previous market's data at once, so numbers are never shown under another market's name. A panel is fresh only when its data arrived on the current live connection; otherwise, if it is showing data, it is labelled stale. Before its first data arrives it shows loading text instead. Each panel's last-update time is the wall-clock time its own data last arrived (book, trades, candles separately), so it does not change while disconnected.
 
 ## Architecture and performance
 
@@ -76,21 +77,21 @@ Failed candle history gets one independent retry after five seconds while the sa
 
 ## Measured render counts
 
-Method (2026-09-24, about 01:05 UTC, current code): `npm run dev`, page opened at `/?profile=1` in headless Chrome 153 at 1024 x 768, driven over the Chrome DevTools Protocol (`visibleAtStart: true`, `requestAnimationFrame` measured at 62 callbacks per second just before each window). React Strict Mode on. Each panel is wrapped in a React `<Profiler>`; its `onRender` callback increments a counter once per **commit** of that panel. Strict Mode double rendering does not add commits. The feed and chart adapter count WebSocket book messages, trade batches, and chart `update` / `setData` calls in the same window. After history loaded, the "Measure 60 seconds" button recorded one 60-second window per coin with no user interaction. The raw JSON is printed to the console as `HL_PROFILE_RESULT` and below the button.
+Method (2026-09-24, about 01:15 UTC, current code): `npm run dev`, page opened at `/?profile=1` in headless Chrome 153 at 1024 x 768, driven over the Chrome DevTools Protocol (`visibleAtStart: true`, `requestAnimationFrame` measured at 62 callbacks per second just before each window). React Strict Mode on. Each panel is wrapped in a React `<Profiler>`; its `onRender` callback increments a counter once per **commit** of that panel. Strict Mode double rendering does not add commits. The feed and chart adapter count WebSocket book messages, trade batches, and chart `update` / `setData` calls in the same window. After history loaded, the "Measure 60 seconds" button recorded one 60-second window per coin with no user interaction. The raw JSON is printed to the console as `HL_PROFILE_RESULT` and below the button.
 
 | Counter (60 s) | BTC | ETH |
 |---|---|---|
-| `bookMessages` | 11 | 11 |
-| `OrderBook` commits | 11 | 11 |
-| `MarketSummary` commits | 5 | 2 |
-| `tradeBatches` | 5 | 3 |
-| `TradesTape` commits | 5 | 3 |
-| `seriesUpdate` (chart API) | 5 | 3 |
+| `bookMessages` | 12 | 11 |
+| `OrderBook` commits | 12 | 11 |
+| `MarketSummary` commits | 3 | 2 |
+| `tradeBatches` | 3 | 1 |
+| `TradesTape` commits | 3 | 1 |
+| `seriesUpdate` (chart API) | 3 | 1 |
 | `seriesSetData` (chart API) | 0 | 0 |
 | `PriceChart` commits | 0 | 0 |
 | `Header`, `ConnectionStatus`, `MarketSelector` commits | 0 | 0 |
 
-What this shows: each panel committed only when its own slice changed. The order book committed once per book message and the tape once per trade batch. The summary committed only when best bid, best ask or mid moved. Live candles reached the chart through `update` without a React commit of `PriceChart`. The header, status and selector did not commit at all. An earlier run on 2026-09-23 (before the last-update time was added to the store) showed the same pattern.
+What this shows: each panel committed only when its own slice changed. The order book committed once per book message and the tape once per trade batch. The summary committed only when best bid, best ask or mid moved. Live candles reached the chart through `update` without a React commit of `PriceChart`. The header, status and selector did not commit at all. Two earlier runs (2026-09-23, and 2026-09-24 before per-panel freshness was added) showed the same pattern.
 
 What this does not show:
 - Throughput. Testnet was quiet (about 11 book snapshots a minute per coin). A raw WebSocket subscribed to BTC and ETH for 30 seconds on 2026-09-23 received 7 book snapshots per coin, so the low counts reflect the feed, not dropped messages. Frame coalescing under a high message rate is covered only by the unit tests.
@@ -99,8 +100,8 @@ What this does not show:
 Raw results:
 
 ```json
-{"coin":"BTC","visibleAtStart":true,"visibilityChanges":0,"windowMs":60000,"completedAfterMs":60005,"Header":0,"ConnectionStatus":0,"MarketSelector":0,"MarketSummary":5,"PriceChart":0,"TradesTape":5,"OrderBook":11,"bookMessages":11,"tradeBatches":5,"seriesUpdate":5,"seriesSetData":0}
-{"coin":"ETH","visibleAtStart":true,"visibilityChanges":0,"windowMs":60000,"completedAfterMs":60002,"Header":0,"ConnectionStatus":0,"MarketSelector":0,"MarketSummary":2,"PriceChart":0,"TradesTape":3,"OrderBook":11,"bookMessages":11,"tradeBatches":3,"seriesUpdate":3,"seriesSetData":0}
+{"coin":"BTC","visibleAtStart":true,"visibilityChanges":0,"windowMs":60000,"completedAfterMs":60001,"Header":0,"ConnectionStatus":0,"MarketSelector":0,"MarketSummary":3,"PriceChart":0,"TradesTape":3,"OrderBook":12,"bookMessages":12,"tradeBatches":3,"seriesUpdate":3,"seriesSetData":0}
+{"coin":"ETH","visibleAtStart":true,"visibilityChanges":0,"windowMs":60000,"completedAfterMs":60001,"Header":0,"ConnectionStatus":0,"MarketSelector":0,"MarketSummary":2,"PriceChart":0,"TradesTape":1,"OrderBook":11,"bookMessages":11,"tradeBatches":1,"seriesUpdate":1,"seriesSetData":0}
 ```
 
 ## Libraries
@@ -113,24 +114,24 @@ Raw results:
 
 ## Verification
 
-The automated suite (34 tests) covers the stale-label rule and its last-update time, manual history retry after the automatic retry fails, offline/online events, the exact backoff cap including jitter, one-shot history retry, rejection diagnostics, a real captured trades fixture, reconnect flushing, snapshot ordering and depth, malformed inputs, trade deduplication and caps, both candle payload shapes, history/live merging, frame coalescing, unrelated slice identity, late-market callbacks, reconnect/resubscribe, heartbeat timeout and teardown.
+The automated suite (37 tests) covers per-panel freshness (retained data stays stale after a reconnect until its channel delivers), the stale-label rule and its last-update time, manual history retry after the automatic retry fails, offline/online events, the exact backoff cap including jitter, one-shot history retry, rejection diagnostics, a real captured trades fixture, reconnect flushing, snapshot ordering and depth, malformed inputs, trade deduplication and caps, both candle payload shapes, history/live merging, frame coalescing, unrelated slice identity, late-market callbacks, reconnect/resubscribe, heartbeat timeout and teardown.
 
-Scripted lifecycle checks (`scripts/verify-lifecycle.mjs`), last run 2026-09-24 about 01:00 UTC against live testnet and the dev server. Headless Chrome 153 with a fresh profile, phone viewport 375 x 812 throughout plus a 1280 x 800 capture of the markets error, driven over the Chrome DevTools Protocol. The script fails only the chosen REST request type (`meta` or `candleSnapshot`) with `Fetch.failRequest`, cuts the network with `Network.emulateNetworkConditions` (real offline: `navigator.onLine` false, new sockets fail), and logs every WebSocket, subscribe and unsubscribe frame and received channel. It wraps `WebSocket` in the page to record when the app itself calls `close()`, and subscribes to the app's store to flag any book, trade or candle price that does not fit the selected coin (BTC above 20,000; ETH between 300 and 20,000). Every capture is checked for horizontal overflow, a chart empty-state text that is actually on top, and an error row that overlaps no panel. Result: 64 of 64 checks passed. Screenshots and `result.json` are written to `$TMPDIR/hl-verify`.
+Scripted lifecycle checks (`scripts/verify-lifecycle.mjs`), last run 2026-09-24 about 01:10 UTC against live testnet and the dev server. Headless Chrome 153 with a fresh profile, phone viewport 375 x 812 throughout plus a 1280 x 800 capture of the markets error, driven over the Chrome DevTools Protocol. The script fails only the chosen REST request type (`meta` or `candleSnapshot`) with `Fetch.failRequest`, cuts the network with `Network.emulateNetworkConditions` (real offline: `navigator.onLine` false, new sockets fail), and logs every WebSocket, subscribe and unsubscribe frame and received channel. It wraps `WebSocket` in the page to record when the app itself calls `close()`, and subscribes to the app's store to flag any book, trade or candle price that does not fit the selected coin (BTC above 20,000; ETH between 300 and 20,000). Every capture is checked for horizontal overflow, a chart empty-state text that is actually on top, and an error row that overlaps no panel. Result: 64 of 64 checks passed. Screenshots and `result.json` are written to `$TMPDIR/hl-verify`.
 
 | Scenario | Observed |
 |---|---|
 | Markets REST failure on first load | Error row with Retry in its own row (no overlap at either width); badge `Waiting for markets`; chart `Waiting for market list`; no socket opened. Retry loads markets and BTC goes live. |
 | Rapid BTC to ETH to BTC (150 ms apart) | 2 sockets created; the ETH one closed before its handshake. One open socket afterwards, subscribed to `l2Book`, `trades` and `candle` for BTC only; every heading says BTC. |
 | Settled BTC to ETH to BTC | Each switch unsubscribes and closes the old socket, then one new socket subscribes only to the new coin. |
-| Candle history blocked, switch to ETH | Notice says it retries automatically and that book and trades are live; exactly one retry about 5 s later; then Retry appears and no further requests are made without it. A Retry while still blocked fails and offers Retry again; a Retry after unblocking loads 200 candles and clears the notice. |
-| Network offline | State `offline`; badge `Offline · will reconnect`; all four panels with data say `Stale · offline`, chart and book with `last update HH:MM:SS UTC`, and that time does not advance; the app closes its socket at once; retry sockets at +1.4, +3.7, +7.7 and +15.7 s all failed, none connected. |
+| Candle history blocked, switch to ETH | Notice says it retries automatically, and says book and trades are live exactly when both have delivered on the current connection; exactly one retry about 5 s later; then Retry appears and no further requests are made without it. A Retry while still blocked fails and offers Retry again; a Retry after unblocking loads 200 candles and clears the notice. |
+| Network offline | State `offline`; badge `Offline · will reconnect`; all four panels with data say `Stale · offline`, chart and book with `last update HH:MM:SS UTC`, and that time does not advance; the app closes its socket at once; retry sockets at +1.4, +3.7, +7.9 and +16.3 s all failed, none connected. |
 | Network restored | One immediate reconnect; history reloads; stale labels and notice clear; one socket with ETH subscriptions only. |
 | Switch to BTC while offline, then restore | No stale labels on the emptied panels while offline; restore reaches BTC live with one BTC-only socket. |
 | Whole run | No store update carried a price from the other market; the app never created a socket while another was unclosed; no frames on closed sockets; no uncaught exceptions or console errors. |
 
 Chrome reports a closed socket only after its close handshake finishes, so under offline emulation a socket the app has already closed still appears open until the network returns; the app-level `close()` record is the source of truth there.
 
-Bugs these runs found and fixed: the markets error was absolutely positioned over the chart heading; the chart's loading and waiting text sat under the chart canvases (Lightweight Charts uses z-index 1 to 3) and was invisible at every width; with no market list the badge said `Connecting`; after the automatic history retry failed, the chart could only recover on a reconnect that a healthy socket never triggers; at phone width the long stale labels wrapped the summary and trades headers.
+Bugs these runs found and fixed: the markets error was absolutely positioned over the chart heading; the chart's loading and waiting text sat under the chart canvases (Lightweight Charts uses z-index 1 to 3) and was invisible at every width; with no market list the badge said `Connecting`; after the automatic history retry failed, the chart could only recover on a reconnect that a healthy socket never triggers; at phone width the long stale labels wrapped the summary and trades headers. A Codex review (gpt-6-sol) then found that a reconnect cleared stale labels before fresh data arrived, and that the chart notice could call the book and trades live before either had delivered; both are fixed by per-panel freshness.
 
 Earlier manual checks in the desktop app's built-in browser covered 768 and 1280 widths on live data. Neither these checks nor the unit tests replace a production soak test.
 
@@ -144,6 +145,7 @@ Each entry: the decision, the alternative, and why.
 - **`update` for changed candles, `setData` only for history, market change or window movement.** Alternative: `setData` on every change. `update` touches one bar; `setData` rebuilds the series.
 - **Unbounded reconnect attempts, delay capped at 15 seconds including jitter.** Alternative: give up after N attempts. A read-only market screen should recover by itself when the network returns; the cap keeps recovery prompt, and jitter avoids synchronized retries.
 - **One automatic history retry, then a manual Retry.** Alternatives: retry until it succeeds, or wait for the next reconnect. One retry covers a transient REST failure without hammering the endpoint. Waiting for a reconnect was the original design, but a healthy socket never reconnects, so the chart could stay empty indefinitely; Retry is the only control added, and it appears only in that state.
+- **Freshness per panel, measured from the current connection.** Alternative: treat everything as fresh once the socket is live. The socket reopens before any channel has re-sent data, so retained numbers would briefly look current; per-panel receipt times cost three store fields and one comparison.
 - **Stale labels carry the last update time where there is room.** Alternative: the time on every label. At phone width the full label wrapped the summary and trades headers, so the chart caption and order book footer show the time and the other two show the short label.
 - **Stale means "not live and showing retained data".** Alternative: stale whenever the socket is not live. The simpler rule labelled empty panels as stale during every initial connect and market switch, which was misleading.
 - **Trades sorted by time, then numeric `tid` descending.** Alternative: arrival order. The tie-break makes the order deterministic; it is not a claim that IDs encode execution order.

@@ -2,14 +2,14 @@ import { memo, useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { fetchMarkets } from '../data/api';
 import { MarketFeed } from '../data/feed';
-import { marketStore, staleLabel, type MarketState } from '../data/store';
+import { marketStore, staleLabel } from '../data/store';
 import type { Level, Trade } from '../data/types';
 import { PriceChart } from './Chart';
 import { profiling } from '../perf/metrics';
 import { ProfileControls, profilePanel } from './profile';
 import { price, size, time } from './format';
 
-const updatedAt = (state: MarketState) => state.lastUpdateAt ? `${time(state.lastUpdateAt)} UTC` : undefined;
+const clock = (at: number | null) => at ? `${time(at)} UTC` : undefined;
 
 function FeedLifecycle() {
   const coin = useStore(marketStore, state => state.coin);
@@ -46,7 +46,7 @@ function MarketSelector() {
         onChange={event => {
           // Reset synchronously so the new label never paints beside the old market's data.
           marketStore.setState({ coin: event.target.value, book: null, trades: [], candles: [],
-            tradesReceived: false, historyLoading: true, historyError: null, historyRetry: null, lastUpdateAt: null, connection: 'connecting' });
+            tradesReceived: false, historyLoading: true, historyError: null, historyRetry: null, connectedAt: null, bookAt: null, tradesAt: null, candlesAt: null, connection: 'connecting' });
         }}>
         {!markets.length && <option value="">{error ? 'Unavailable' : 'Loading…'}</option>}
         {markets.map(market => <option key={market.name} value={market.name}>{market.name} / USD</option>)}
@@ -70,7 +70,7 @@ function ConnectionStatus() {
 
 function MarketSummary() {
   // Short label here: the time is shown in the chart caption and order book footer.
-  const stale = useStore(marketStore, state => staleLabel(state.connection, state.book !== null));
+  const stale = useStore(marketStore, state => staleLabel(state, state.book !== null, state.bookAt));
   const mid = useStore(marketStore, state => state.book?.bids[0] && state.book?.asks[0]
     ? (state.book.bids[0].price + state.book.asks[0].price) / 2 : null);
   const bestBid = useStore(marketStore, state => state.book?.bids[0]?.price);
@@ -100,7 +100,7 @@ function OrderBook() {
   const book = useStore(marketStore, state => state.book);
   const coin = useStore(marketStore, state => state.coin);
   const decimals = useStore(marketStore, state => state.markets.find(market => market.name === state.coin)?.sizeDecimals ?? 5);
-  const stale = useStore(marketStore, state => staleLabel(state.connection, state.book !== null, updatedAt(state)));
+  const stale = useStore(marketStore, state => staleLabel(state, state.book !== null, state.bookAt, clock(state.bookAt)));
   const max = Math.max(book?.bids.at(-1)?.cumulative ?? 0, book?.asks.at(-1)?.cumulative ?? 0, 0.000001);
   const spread = book?.bids[0] && book?.asks[0] ? book.asks[0].price - book.bids[0].price : null;
   return <section className="panel book-panel" aria-label="Live order book">
@@ -136,7 +136,7 @@ function TradesTape() {
   const received = useStore(marketStore, state => state.tradesReceived);
   const coin = useStore(marketStore, state => state.coin);
   const decimals = useStore(marketStore, state => state.markets.find(market => market.name === state.coin)?.sizeDecimals ?? 5);
-  const stale = useStore(marketStore, state => staleLabel(state.connection, state.trades.length > 0));
+  const stale = useStore(marketStore, state => staleLabel(state, state.trades.length > 0, state.tradesAt));
   return <section className="panel trades-panel" aria-label="Recent trades">
     <div className="panel-heading"><h2>Recent trades <span className="muted">/ {coin || '—'}</span> <span className="count">{trades.length}</span></h2>
       <span className="panel-meta">{stale ?? 'Latest 50 · testnet'}</span></div>

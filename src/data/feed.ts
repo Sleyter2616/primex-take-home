@@ -81,7 +81,8 @@ export class MarketFeed {
     this.deps.networkEvents?.addEventListener('online', this.onOnline);
     this.store.setState({ coin: this.coin, connection: 'connecting', book: null,
       trades: [], tradesReceived: false, rejectedTradeIds: 0, candles: [], historyLoading: true,
-      historyError: null, historyRevision: 0, historyRetry: null, lastUpdateAt: null, reconnects: 0, feedError: null });
+      historyError: null, historyRevision: 0, historyRetry: null, connectedAt: null, bookAt: null, tradesAt: null, candlesAt: null,
+      reconnects: 0, feedError: null });
     this.connect();
   }
 
@@ -144,7 +145,7 @@ export class MarketFeed {
       clearTimeout(this.connectionTimer);
       this.offline = false;
       this.lastMessage = Date.now();
-      this.store.setState({ connection: 'live', feedError: null });
+      this.store.setState({ connection: 'live', connectedAt: Date.now(), feedError: null });
       try {
         for (const subscription of this.subscriptions()) {
           socket.send(JSON.stringify({ method: 'subscribe', subscription }));
@@ -226,7 +227,7 @@ export class MarketFeed {
       // Include live candles received since the request began, even if already flushed.
       const merged = mergeCandles(history, this.liveDuringHistory ?? []);
       const candles = mergeCandles(this.store.getState().candles, merged);
-      this.store.setState(state => ({ candles, historyLoading: false,
+      this.store.setState(state => ({ candles, candlesAt: Date.now(), historyLoading: false,
         historyRevision: state.historyRevision + 1 }));
     } catch {
       if (this.active && generation === this.generation && this.store.getState().coin === this.coin) {
@@ -261,16 +262,18 @@ export class MarketFeed {
     if (!this.active || this.store.getState().coin !== this.coin) return;
     const current = this.store.getState();
     const patch: Partial<MarketState> = {};
-    if (this.pendingBook) patch.book = this.pendingBook;
+    const now = Date.now();
+    if (this.pendingBook) { patch.book = this.pendingBook; patch.bookAt = now; }
     if (this.sawTrades) {
-      patch.tradesReceived = true;
+      // Any trades message, even an empty batch, confirms the channel is delivering on this connection.
+      patch.tradesReceived = true; patch.tradesAt = now;
       if (this.pendingTrades.length) patch.trades = mergeTrades(current.trades, this.pendingTrades);
     }
-    if (this.pendingCandles.length) patch.candles = mergeCandles(current.candles, this.pendingCandles);
+    if (this.pendingCandles.length) { patch.candles = mergeCandles(current.candles, this.pendingCandles); patch.candlesAt = now; }
     this.pendingBook = null;
     this.pendingTrades = [];
     this.pendingCandles = [];
     this.sawTrades = false;
-    if (Object.keys(patch).length) this.store.setState({ ...patch, lastUpdateAt: Date.now() });
+    if (Object.keys(patch).length) this.store.setState(patch);
   }
 }

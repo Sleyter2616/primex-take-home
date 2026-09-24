@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MarketFeed, type SocketLike } from './feed';
-import { createMarketStore } from './store';
+import { createMarketStore, isFresh, staleLabel } from './store';
 import type { Candle } from './types';
 
 class FakeSocket implements SocketLike {
@@ -219,26 +219,41 @@ describe('review regressions and checkpoint b', () => {
     feed.dispose();
   });
 
-  it('records when live data was last published and resets it for a new market', () => {
+  it('records per-panel receipt times and resets them for a new market', () => {
     vi.setSystemTime(1_000_000);
     const { feed, sockets, store } = setup(); sockets[0].open();
-    expect(store.getState().lastUpdateAt).toBeNull();
-    sockets[0].emit('l2Book', book('BTC', 1)); vi.advanceTimersByTime(16);
-    expect(store.getState().lastUpdateAt).toBe(1_000_016);
+    expect(store.getState().connectedAt).toBe(1_000_000);
+    expect(store.getState().bookAt).toBeNull();
+    sockets[0].emit('l2Book', book('BTC', 1)); sockets[0].emit('trades', []); vi.advanceTimersByTime(16);
+    expect(store.getState().bookAt).toBe(1_000_016);
+    expect(store.getState().tradesAt).toBe(1_000_016);
+    expect(store.getState().candlesAt).toBeNull();
     feed.dispose();
     const next = new MarketFeed(store, 'ETH', { socket: () => new FakeSocket(), history: () => new Promise(() => {}) });
-    next.start(); expect(store.getState().lastUpdateAt).toBeNull();
+    next.start();
+    const s = store.getState();
+    expect([s.connectedAt, s.bookAt, s.tradesAt, s.candlesAt]).toEqual([null, null, null, null]);
     next.dispose(); expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('cancels a scheduled history retry on reconnect and disposal', async () => {
-    const { feed, sockets, historyCalls } = setup(); sockets[0].open();
-    historyCalls[0].reject(new Error('failed')); await Promise.resolve();
-    sockets[0].onclose!(); vi.advanceTimersByTime(1000); sockets[1].open();
-    vi.advanceTimersByTime(4000); expect(historyCalls).toHaveLength(2);
-    historyCalls[1].reject(new Error('failed')); await Promise.resolve();
-    feed.dispose(); expect(vi.getTimerCount()).toBe(0);
-    vi.advanceTimersByTime(6000); expect(historyCalls).toHaveLength(2);
+  it('keeps retained data stale after a reconnect until its channel delivers on the new socket', () => {
+    vi.setSystemTime(1_000_000);
+    const { feed, sockets, store } = setup(); sockets[0].open();
+    sockets[0].emit('l2Book', book('BTC', 1)); sockets[0].emit('trades', [tradeWire(9)]); vi.advanceTimersByTime(16);
+    const label = () => staleLabel(store.getState(), store.getState().book !== null, store.getState().bookAt);
+    const tradesFresh = () => isFresh(store.getState(), store.getState().tradesAt);
+    expect(label()).toBeNull(); expect(tradesFresh()).toBe(true);
+    sockets[0].onclose!();
+    expect(label()).toBe('Stale · reconnecting');
+    vi.advanceTimersByTime(1000); sockets[1].open();
+    expect(store.getState().connection).toBe('live');
+    expect(store.getState().book).not.toBeNull(); // retained from before the disconnect
+    expect(label()).toBe('Stale · waiting for update'); expect(tradesFresh()).toBe(false);
+    sockets[1].emit('l2Book', book('BTC', 2)); vi.advanceTimersByTime(16);
+    expect(label()).toBeNull(); expect(tradesFresh()).toBe(false);
+    sockets[1].emit('trades', []); vi.advanceTimersByTime(16);
+    expect(tradesFresh()).toBe(true);
+    feed.dispose();
   });
 
   it('counts and logs unsafe tids while retaining valid trades, including same-ms ordering', () => {
