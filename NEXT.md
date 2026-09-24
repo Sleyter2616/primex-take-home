@@ -22,6 +22,11 @@ Checkpoint **c** is complete (commit `feat: complete checkpoint c`). Next: revie
 - Codex review of `028b7a6` (gpt-6-sol, medium) found two gaps, both fixed with per-panel freshness: a reconnect cleared stale labels before fresh data arrived (high), and the chart notice could call book and trades live before they delivered (medium). 37 tests; lifecycle script 64/64; profile re-recorded.
 - Re-review (gpt-6-sol, low) found timestamp ordering fragile and empty history marking candles fresh; freshness now uses a monotonic connection counter and ignores empty history. README row corrected. 38 tests; lifecycle 65/65; profile re-recorded.
 
+## Deployed (2026-09-24)
+
+- Vercel project `hyperliquid-testnet-terminal` (account sleyter2616, Hobby). Live at https://hyperliquid-testnet-terminal.vercel.app from commit `ec985cd`; checked in a browser: connected to testnet, 158 markets, book, trades and candles, no console errors.
+- Deployed with the Vercel CLI from this folder (`vercel deploy`); no Git integration. Vercel assigned the first deploy to production automatically. Later `vercel deploy` runs are previews behind Vercel login; `vercel deploy --prod` updates the public URL.
+
 ## Synthetic load (2026-09-24, Claude Code)
 
 - `src/data/feed.load.test.ts` (4 synthetic burst tests in `npm test`) and `scripts/load-harness.mjs` (headless Chrome, generated data labelled on the page). No application code changed.

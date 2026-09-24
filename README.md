@@ -2,6 +2,8 @@
 
 A single-page, read-only perpetuals terminal with a live order book, recent trades, and a one-minute candlestick chart. Market discovery and every data request use **testnet**. No credentials or wallet are required.
 
+Live: https://hyperliquid-testnet-terminal.vercel.app (Vercel, static build of this repository).
+
 ## Run
 
 Requires Node.js 22.12 or newer. From this directory:
