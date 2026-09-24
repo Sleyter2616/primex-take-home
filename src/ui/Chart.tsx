@@ -10,10 +10,10 @@ import type { Candle } from '../data/types';
 const bar = (candle: Candle): CandlestickData => ({ ...candle, time: candle.time as UTCTimestamp });
 
 export function PriceChart() {
-  const stale = useStore(marketStore, state => staleLabel(state, state.candles.length > 0, state.candlesAt,
+  const stale = useStore(marketStore, state => staleLabel(state, state.candles.length > 0, state.candlesFrom,
     state.candlesAt ? `${time(state.candlesAt)} UTC` : undefined));
   // Claim the book and trades are live only once both delivered on the current connection.
-  const live = useStore(marketStore, state => isFresh(state, state.bookAt) && isFresh(state, state.tradesAt));
+  const live = useStore(marketStore, state => isFresh(state, state.bookFrom) && isFresh(state, state.tradesFrom));
   const retry = useStore(marketStore, state => state.historyRetry);
   const container = useRef<HTMLDivElement>(null);
   const loading = useStore(marketStore, state => state.historyLoading);

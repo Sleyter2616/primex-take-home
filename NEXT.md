@@ -20,6 +20,7 @@ Checkpoint **c** is complete (commit `feat: complete checkpoint c`). Next: revie
 - `scripts/verify-lifecycle.mjs` committed: 64/64 checks on live testnet, phone viewport. Render profile re-recorded in headless Chrome on current code (README). 34 tests, typecheck, build pass.
 - README: Failure states table, Limitations, and Next steps with more time.
 - Codex review of `028b7a6` (gpt-6-sol, medium) found two gaps, both fixed with per-panel freshness: a reconnect cleared stale labels before fresh data arrived (high), and the chart notice could call book and trades live before they delivered (medium). 37 tests; lifecycle script 64/64; profile re-recorded.
+- Re-review (gpt-6-sol, low) found timestamp ordering fragile and empty history marking candles fresh; freshness now uses a monotonic connection counter and ignores empty history. README row corrected. 38 tests; lifecycle 65/65; profile re-recorded.
 
 ## Checkpoint c: state at pause (history)
 

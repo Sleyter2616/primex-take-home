@@ -219,40 +219,57 @@ describe('review regressions and checkpoint b', () => {
     feed.dispose();
   });
 
-  it('records per-panel receipt times and resets them for a new market', () => {
+  it('records which connection and when each panel last received data, and resets it for a new market', () => {
     vi.setSystemTime(1_000_000);
     const { feed, sockets, store } = setup(); sockets[0].open();
-    expect(store.getState().connectedAt).toBe(1_000_000);
-    expect(store.getState().bookAt).toBeNull();
+    const id = store.getState().connectionId;
+    expect(id).toBe(1); expect(store.getState().bookFrom).toBeNull();
     sockets[0].emit('l2Book', book('BTC', 1)); sockets[0].emit('trades', []); vi.advanceTimersByTime(16);
+    expect([store.getState().bookFrom, store.getState().tradesFrom, store.getState().candlesFrom]).toEqual([id, id, null]);
     expect(store.getState().bookAt).toBe(1_000_016);
-    expect(store.getState().tradesAt).toBe(1_000_016);
-    expect(store.getState().candlesAt).toBeNull();
     feed.dispose();
     const next = new MarketFeed(store, 'ETH', { socket: () => new FakeSocket(), history: () => new Promise(() => {}) });
     next.start();
     const s = store.getState();
-    expect([s.connectedAt, s.bookAt, s.tradesAt, s.candlesAt]).toEqual([null, null, null, null]);
+    expect([s.bookFrom, s.tradesFrom, s.candlesFrom, s.bookAt, s.tradesAt, s.candlesAt]).toEqual([null, null, null, null, null, null]);
+    expect(s.connectionId).toBe(id); // never reset, so a later socket can never reuse an id
     next.dispose(); expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('keeps retained data stale after a reconnect until its channel delivers on the new socket', () => {
+  it('keeps retained data stale after a reconnect until its channel delivers, even if the clock stands still or steps back', () => {
     vi.setSystemTime(1_000_000);
     const { feed, sockets, store } = setup(); sockets[0].open();
     sockets[0].emit('l2Book', book('BTC', 1)); sockets[0].emit('trades', [tradeWire(9)]); vi.advanceTimersByTime(16);
-    const label = () => staleLabel(store.getState(), store.getState().book !== null, store.getState().bookAt);
-    const tradesFresh = () => isFresh(store.getState(), store.getState().tradesAt);
+    const label = () => staleLabel(store.getState(), store.getState().book !== null, store.getState().bookFrom);
+    const tradesFresh = () => isFresh(store.getState(), store.getState().tradesFrom);
     expect(label()).toBeNull(); expect(tradesFresh()).toBe(true);
+    const lastFlush = store.getState().bookAt!;
     sockets[0].onclose!();
     expect(label()).toBe('Stale · reconnecting');
-    vi.advanceTimersByTime(1000); sockets[1].open();
+    vi.advanceTimersByTime(1000);
+    vi.setSystemTime(lastFlush); sockets[1].open(); // same millisecond as the last flush
     expect(store.getState().connection).toBe('live');
-    expect(store.getState().book).not.toBeNull(); // retained from before the disconnect
     expect(label()).toBe('Stale · waiting for update'); expect(tradesFresh()).toBe(false);
+    vi.setSystemTime(lastFlush - 60_000); // clock steps backwards
     sockets[1].emit('l2Book', book('BTC', 2)); vi.advanceTimersByTime(16);
     expect(label()).toBeNull(); expect(tradesFresh()).toBe(false);
     sockets[1].emit('trades', []); vi.advanceTimersByTime(16);
     expect(tradesFresh()).toBe(true);
+    feed.dispose();
+  });
+
+  it('an empty history response after a reconnect leaves retained candles stale', async () => {
+    const { feed, sockets, historyCalls, store } = setup(); sockets[0].open();
+    historyCalls[0].resolve([{ time: 60, open: 100, high: 102, low: 99, close: 101 }]); await Promise.resolve();
+    const candlesFresh = () => isFresh(store.getState(), store.getState().candlesFrom);
+    expect(candlesFresh()).toBe(true);
+    sockets[0].onclose!(); vi.advanceTimersByTime(1000); sockets[1].open();
+    historyCalls[1].resolve([]); await Promise.resolve();
+    expect(store.getState().candles).toHaveLength(1); // retained
+    expect(store.getState().historyError).toBeNull();
+    expect(candlesFresh()).toBe(false);
+    sockets[1].emit('candle', candleWire(120_000)); vi.advanceTimersByTime(16);
+    expect(candlesFresh()).toBe(true);
     feed.dispose();
   });
 

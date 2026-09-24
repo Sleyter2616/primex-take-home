@@ -158,8 +158,8 @@ const selectMarket = coin => evaluate(`(() => { const el = document.querySelecto
   el.dispatchEvent(new Event('change', { bubbles: true })); return el.value; })()`);
 // Mirrors isFresh in src/data/store.ts: book and trades both delivered on the current live connection.
 const bookAndTradesFresh = () => evaluate(`(() => { const s = window.__store.getState();
-  const fresh = at => s.connection === 'live' && at !== null && s.connectedAt !== null && at >= s.connectedAt;
-  return fresh(s.bookAt) && fresh(s.tradesAt); })()`);
+  const fresh = from => s.connection === 'live' && from === s.connectionId;
+  return fresh(s.bookFrom) && fresh(s.tradesFrom); })()`);
 const liveClaimMatches = async u => /Order book and trades are live/.test(u.notice ?? '') === await bookAndTradesFresh();
 const subsOfLive = () => liveSockets().map(s => [...s.subs].sort().join(','));
 const liveReady = coin => waitFor(`${coin} live with data`, `(() => { const s = window.__store?.getState(); return s && s.coin === '${coin}' && s.connection === 'live' && !!s.book && s.candles.length > 0 && !s.historyLoading; })()`, 25_000);

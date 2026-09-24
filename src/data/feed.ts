@@ -2,7 +2,7 @@ import { metric } from '../perf/metrics';
 import { fetchHistory, WS_URL } from './api';
 import { mergeCandles, mergeTrades, parseBook, parseCandles, parseTrades, record,
   type Book, type Candle, type Trade } from './types';
-import type { MarketStore, MarketState } from './store';
+import { noPanelData, type MarketStore, type MarketState } from './store';
 
 export interface SocketLike {
   readyState: number;
@@ -81,8 +81,7 @@ export class MarketFeed {
     this.deps.networkEvents?.addEventListener('online', this.onOnline);
     this.store.setState({ coin: this.coin, connection: 'connecting', book: null,
       trades: [], tradesReceived: false, rejectedTradeIds: 0, candles: [], historyLoading: true,
-      historyError: null, historyRevision: 0, historyRetry: null, connectedAt: null, bookAt: null, tradesAt: null, candlesAt: null,
-      reconnects: 0, feedError: null });
+      historyError: null, historyRevision: 0, historyRetry: null, ...noPanelData, reconnects: 0, feedError: null });
     this.connect();
   }
 
@@ -145,7 +144,7 @@ export class MarketFeed {
       clearTimeout(this.connectionTimer);
       this.offline = false;
       this.lastMessage = Date.now();
-      this.store.setState({ connection: 'live', connectedAt: Date.now(), feedError: null });
+      this.store.setState(state => ({ connection: 'live', connectionId: state.connectionId + 1, feedError: null }));
       try {
         for (const subscription of this.subscriptions()) {
           socket.send(JSON.stringify({ method: 'subscribe', subscription }));
@@ -227,7 +226,9 @@ export class MarketFeed {
       // Include live candles received since the request began, even if already flushed.
       const merged = mergeCandles(history, this.liveDuringHistory ?? []);
       const candles = mergeCandles(this.store.getState().candles, merged);
-      this.store.setState(state => ({ candles, candlesAt: Date.now(), historyLoading: false,
+      // An empty response refreshes nothing, so retained candles keep their stale label.
+      const refreshed = history.length ? { candlesFrom: this.store.getState().connectionId, candlesAt: Date.now() } : {};
+      this.store.setState(state => ({ candles, ...refreshed, historyLoading: false,
         historyRevision: state.historyRevision + 1 }));
     } catch {
       if (this.active && generation === this.generation && this.store.getState().coin === this.coin) {
@@ -262,14 +263,14 @@ export class MarketFeed {
     if (!this.active || this.store.getState().coin !== this.coin) return;
     const current = this.store.getState();
     const patch: Partial<MarketState> = {};
-    const now = Date.now();
-    if (this.pendingBook) { patch.book = this.pendingBook; patch.bookAt = now; }
+    const now = Date.now(), from = current.connectionId;
+    if (this.pendingBook) { patch.book = this.pendingBook; patch.bookFrom = from; patch.bookAt = now; }
     if (this.sawTrades) {
       // Any trades message, even an empty batch, confirms the channel is delivering on this connection.
-      patch.tradesReceived = true; patch.tradesAt = now;
+      patch.tradesReceived = true; patch.tradesFrom = from; patch.tradesAt = now;
       if (this.pendingTrades.length) patch.trades = mergeTrades(current.trades, this.pendingTrades);
     }
-    if (this.pendingCandles.length) { patch.candles = mergeCandles(current.candles, this.pendingCandles); patch.candlesAt = now; }
+    if (this.pendingCandles.length) { patch.candles = mergeCandles(current.candles, this.pendingCandles); patch.candlesFrom = from; patch.candlesAt = now; }
     this.pendingBook = null;
     this.pendingTrades = [];
     this.pendingCandles = [];
