@@ -186,7 +186,7 @@ describe('review regressions and checkpoint b', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('retries history once at 5s while live, then waits for a new connection', async () => {
+  it('retries history once at 5s while live, then offers a manual retry', async () => {
     const { feed, sockets, historyCalls, store } = setup(); sockets[0].open();
     historyCalls[0].reject(new Error('REST failed')); await Promise.resolve();
     expect(store.getState().historyError).toContain('5 seconds');
@@ -195,8 +195,40 @@ describe('review regressions and checkpoint b', () => {
     historyCalls[1].reject(new Error('REST failed again')); await Promise.resolve();
     vi.advanceTimersByTime(5000); expect(historyCalls).toHaveLength(2);
     expect(sockets).toHaveLength(1); expect(store.getState().connection).toBe('live');
-    expect(store.getState().historyError).toContain('reconnection');
+    expect(store.getState().historyError).toContain('Automatic retry failed');
+    const retry = store.getState().historyRetry;
+    expect(retry).toBeTypeOf('function');
+    retry!(); expect(historyCalls).toHaveLength(3);
+    expect(store.getState().historyRetry).toBeNull(); expect(store.getState().historyLoading).toBe(true);
+    historyCalls[2].resolve([{ time: 60, open: 100, high: 102, low: 99, close: 101 }]); await Promise.resolve();
+    expect(store.getState().historyError).toBeNull(); expect(store.getState().candles).toHaveLength(1);
     feed.dispose(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('drops the manual history retry on reconnect and says history reloads after reconnecting', async () => {
+    const { feed, sockets, historyCalls, store } = setup(); sockets[0].open();
+    historyCalls[0].reject(new Error('failed')); await Promise.resolve();
+    vi.advanceTimersByTime(5000); historyCalls[1].reject(new Error('failed')); await Promise.resolve();
+    const obsolete = store.getState().historyRetry!;
+    sockets[0].onclose!();
+    expect(store.getState().historyRetry).toBeNull();
+    expect(store.getState().historyError).toContain('after reconnecting');
+    obsolete(); expect(historyCalls).toHaveLength(2);
+    vi.advanceTimersByTime(1000); sockets[1].open(); expect(historyCalls).toHaveLength(3);
+    expect(store.getState().historyError).toBeNull();
+    feed.dispose();
+  });
+
+  it('records when live data was last published and resets it for a new market', () => {
+    vi.setSystemTime(1_000_000);
+    const { feed, sockets, store } = setup(); sockets[0].open();
+    expect(store.getState().lastUpdateAt).toBeNull();
+    sockets[0].emit('l2Book', book('BTC', 1)); vi.advanceTimersByTime(16);
+    expect(store.getState().lastUpdateAt).toBe(1_000_016);
+    feed.dispose();
+    const next = new MarketFeed(store, 'ETH', { socket: () => new FakeSocket(), history: () => new Promise(() => {}) });
+    next.start(); expect(store.getState().lastUpdateAt).toBeNull();
+    next.dispose(); expect(vi.getTimerCount()).toBe(0);
   });
 
   it('cancels a scheduled history retry on reconnect and disposal', async () => {

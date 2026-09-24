@@ -14,13 +14,17 @@ export interface MarketState {
   historyLoading: boolean;
   historyError: string | null;
   historyRevision: number;
+  /** Manual history retry, set only after the automatic retry failed on a live socket. */
+  historyRetry: (() => void) | null;
+  /** Wall-clock time (ms) of the last live data published to the store. */
+  lastUpdateAt: number | null;
   reconnects: number;
   feedError: string | null;
 }
 export const createMarketStore = () => createStore<MarketState>(() => ({
   markets: [], marketError: null, coin: '', connection: 'connecting',
   book: null, trades: [], tradesReceived: false, rejectedTradeIds: 0, candles: [],
-  historyLoading: true, historyError: null, historyRevision: 0,
+  historyLoading: true, historyError: null, historyRevision: 0, historyRetry: null, lastUpdateAt: null,
   reconnects: 0, feedError: null,
 }));
 export type MarketStore = ReturnType<typeof createMarketStore>;
@@ -28,5 +32,8 @@ export const marketStore = createMarketStore();
 
 // A panel is stale only while it shows retained data from a connection that is not live.
 // Before the first data arrives (initial connect, market switch) the panel is loading, not stale.
-export const staleLabel = (connection: Connection, hasData: boolean) =>
-  !hasData || connection === 'live' ? null : connection === 'offline' ? 'Stale · offline' : 'Stale · reconnecting';
+export const staleLabel = (connection: Connection, hasData: boolean, lastUpdate?: string) => {
+  if (!hasData || connection === 'live') return null;
+  const label = connection === 'offline' ? 'Stale · offline' : 'Stale · reconnecting';
+  return lastUpdate ? `${label} · last update ${lastUpdate}` : label;
+};

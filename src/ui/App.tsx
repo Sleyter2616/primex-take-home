@@ -2,12 +2,14 @@ import { memo, useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { fetchMarkets } from '../data/api';
 import { MarketFeed } from '../data/feed';
-import { marketStore, staleLabel } from '../data/store';
+import { marketStore, staleLabel, type MarketState } from '../data/store';
 import type { Level, Trade } from '../data/types';
 import { PriceChart } from './Chart';
 import { profiling } from '../perf/metrics';
 import { ProfileControls, profilePanel } from './profile';
 import { price, size, time } from './format';
+
+const updatedAt = (state: MarketState) => state.lastUpdateAt ? `${time(state.lastUpdateAt)} UTC` : undefined;
 
 function FeedLifecycle() {
   const coin = useStore(marketStore, state => state.coin);
@@ -44,7 +46,7 @@ function MarketSelector() {
         onChange={event => {
           // Reset synchronously so the new label never paints beside the old market's data.
           marketStore.setState({ coin: event.target.value, book: null, trades: [], candles: [],
-            tradesReceived: false, historyLoading: true, historyError: null, connection: 'connecting' });
+            tradesReceived: false, historyLoading: true, historyError: null, historyRetry: null, lastUpdateAt: null, connection: 'connecting' });
         }}>
         {!markets.length && <option value="">{error ? 'Unavailable' : 'Loading…'}</option>}
         {markets.map(market => <option key={market.name} value={market.name}>{market.name} / USD</option>)}
@@ -52,7 +54,7 @@ function MarketSelector() {
     </div>
     <span className="contract-badge">PERP</span>
   </div>
-  {error && <div className="market-error" role="alert">Markets unavailable: {error} <button onClick={() => setAttempt(n => n + 1)}>Retry</button></div>}
+  {error && <div className="market-error" role="alert" title={error}>Could not load the market list. This does not retry automatically. <button onClick={() => setAttempt(n => n + 1)}>Retry</button></div>}
   </>;
 }
 
@@ -60,13 +62,14 @@ function ConnectionStatus() {
   const connection = useStore(marketStore, state => state.connection);
   const error = useStore(marketStore, state => state.feedError);
   const coin = useStore(marketStore, state => state.coin);
-  const labels = { live: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting', offline: 'Offline' };
+  const labels = { live: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting automatically', offline: 'Offline · will reconnect' };
   return <div className={`connection ${connection}`} role="status" title={error ?? 'Hyperliquid testnet WebSocket'}>
     <span className="status-dot" />{error ? `Error · ${error}` : coin ? labels[connection] : 'Waiting for markets'}
   </div>;
 }
 
 function MarketSummary() {
+  // Short label here: the time is shown in the chart caption and order book footer.
   const stale = useStore(marketStore, state => staleLabel(state.connection, state.book !== null));
   const mid = useStore(marketStore, state => state.book?.bids[0] && state.book?.asks[0]
     ? (state.book.bids[0].price + state.book.asks[0].price) / 2 : null);
@@ -97,11 +100,11 @@ function OrderBook() {
   const book = useStore(marketStore, state => state.book);
   const coin = useStore(marketStore, state => state.coin);
   const decimals = useStore(marketStore, state => state.markets.find(market => market.name === state.coin)?.sizeDecimals ?? 5);
-  const stale = useStore(marketStore, state => staleLabel(state.connection, state.book !== null));
+  const stale = useStore(marketStore, state => staleLabel(state.connection, state.book !== null, updatedAt(state)));
   const max = Math.max(book?.bids.at(-1)?.cumulative ?? 0, book?.asks.at(-1)?.cumulative ?? 0, 0.000001);
   const spread = book?.bids[0] && book?.asks[0] ? book.asks[0].price - book.bids[0].price : null;
   return <section className="panel book-panel" aria-label="Live order book">
-    <div className="panel-heading"><h2>Order book</h2><span className="panel-meta">20 levels / side</span></div>
+    <div className="panel-heading"><h2>Order book <span className="muted">/ {coin || '—'}</span></h2><span className="panel-meta">20 levels / side</span></div>
     <div className="book-table" role="table" aria-label={`${coin} order book`}>
       <div className="book-columns" role="row"><span role="columnheader">Price (USD)</span>
         <span role="columnheader">Size ({coin || '—'})</span><span role="columnheader">Total</span></div>
@@ -135,8 +138,8 @@ function TradesTape() {
   const decimals = useStore(marketStore, state => state.markets.find(market => market.name === state.coin)?.sizeDecimals ?? 5);
   const stale = useStore(marketStore, state => staleLabel(state.connection, state.trades.length > 0));
   return <section className="panel trades-panel" aria-label="Recent trades">
-    <div className="panel-heading"><h2>Recent trades <span className="count">{trades.length}</span></h2>
-      <span className="panel-meta">Latest 50 · {stale ?? 'testnet'}</span></div>
+    <div className="panel-heading"><h2>Recent trades <span className="muted">/ {coin || '—'}</span> <span className="count">{trades.length}</span></h2>
+      <span className="panel-meta">{stale ?? 'Latest 50 · testnet'}</span></div>
     <div className={`trades-scroll ${stale ? 'stale' : ''}`}>
       <table><thead><tr><th>Price (USD)</th><th>Size ({coin || '—'})</th><th>Side</th><th>Time (UTC)</th></tr></thead>
         <tbody>{trades.map(trade => <TradeRow key={trade.id} trade={trade} decimals={decimals} />)}</tbody></table>

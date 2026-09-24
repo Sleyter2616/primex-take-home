@@ -13,6 +13,13 @@ Checkpoint **c** is complete (commit `feat: complete checkpoint c`). Next: revie
 - Verification gaps closed 2026-09-24 with a scripted headless Chrome run (54/54 checks, table in README Verification): markets failure and Retry, rapid and settled BTC/ETH/BTC, blocked candle history, real network offline and restore, switching while offline, phone layout in every error state. Fixed three error-state display bugs it found.
 - README: Trade-offs section, 200-minute history window, no trade replay, limitations. 31 tests, typecheck and build pass.
 
+## Failure-state pass (2026-09-24, Claude Code)
+
+- Every panel heading names the coin; stale labels add the last update time (chart caption, order book footer); badge says recovery is automatic; market-list error says it needs Retry.
+- Chart shows history failures in place, says whether book and trades are live, and offers a manual Retry after the one automatic retry fails. Before, a failed history could only recover on a reconnect that a healthy socket never triggers.
+- `scripts/verify-lifecycle.mjs` committed: 64/64 checks on live testnet, phone viewport. Render profile re-recorded in headless Chrome on current code (README). 34 tests, typecheck, build pass.
+- README: Failure states table, Limitations, and Next steps with more time.
+
 ## Checkpoint c: state at pause (history)
 
 Codex paused checkpoint c at `0483b91` with stale indications, the `onopen` offline-flag fix and test, and the dev-only profiler. The three open issues it listed (merged profiler id, data layer importing UI, no recorded run) are resolved above.

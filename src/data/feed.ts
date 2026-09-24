@@ -32,6 +32,10 @@ const defaults: Dependencies = {
   warn: message => console.warn(message),
 };
 
+const HISTORY_AUTO = 'Candle history unavailable. Retrying automatically in 5 seconds.';
+const HISTORY_MANUAL = 'Candle history unavailable. Automatic retry failed.';
+const HISTORY_AFTER_RECONNECT = 'Candle history unavailable. It reloads automatically after reconnecting.';
+
 /** One selected-market session. Stop invalidates every socket, timer and REST callback. */
 export class MarketFeed {
   private deps: Dependencies;
@@ -77,7 +81,7 @@ export class MarketFeed {
     this.deps.networkEvents?.addEventListener('online', this.onOnline);
     this.store.setState({ coin: this.coin, connection: 'connecting', book: null,
       trades: [], tradesReceived: false, rejectedTradeIds: 0, candles: [], historyLoading: true,
-      historyError: null, historyRevision: 0, reconnects: 0, feedError: null });
+      historyError: null, historyRevision: 0, historyRetry: null, lastUpdateAt: null, reconnects: 0, feedError: null });
     this.connect();
   }
 
@@ -201,7 +205,9 @@ export class MarketFeed {
     this.clearPending();
     clearTimeout(this.retryTimer);
     this.store.setState(state => ({ connection: this.offline ? 'offline' : 'reconnecting',
-      reconnects: state.reconnects + 1, historyLoading: false }));
+      reconnects: state.reconnects + 1, historyLoading: false, historyRetry: null,
+      // Any pending history retry was cancelled; the next connection reloads history.
+      historyError: state.historyError ? HISTORY_AFTER_RECONNECT : null }));
     if (immediate) { this.connect(); return; }
     const delay = Math.min(1000 * 2 ** this.failures++ + this.deps.random() * 500, 15_000);
     this.retryTimer = setTimeout(() => this.connect(), delay);
@@ -211,7 +217,7 @@ export class MarketFeed {
     this.historyAbort?.abort();
     const abort = this.historyAbort = new AbortController();
     this.liveDuringHistory = [];
-    this.store.setState({ historyLoading: true, historyError: null });
+    this.store.setState({ historyLoading: true, historyError: null, historyRetry: null });
     clearTimeout(this.historyTimer);
     const timeout = this.historyTimer = setTimeout(() => abort.abort(), 12_000);
     try {
@@ -224,14 +230,15 @@ export class MarketFeed {
         historyRevision: state.historyRevision + 1 }));
     } catch {
       if (this.active && generation === this.generation && this.store.getState().coin === this.coin) {
+        const live = this.socket?.readyState === 1;
+        const current = () => this.active && this.generation === generation
+          && this.store.getState().coin === this.coin && this.socket?.readyState === 1;
+        // One automatic retry; after that the chart offers a manual Retry while the socket stays live.
         this.store.setState({ historyLoading: false,
-          historyError: retried ? 'History unavailable. Live candles continue; history retries on reconnection.'
-            : 'History unavailable. Live candles continue; retrying in 5 seconds.' });
-        if (!retried && this.socket?.readyState === 1) {
-          this.historyRetryTimer = setTimeout(() => {
-            if (this.active && this.generation === generation && this.store.getState().coin === this.coin
-                && this.socket?.readyState === 1) void this.loadHistory(generation, true);
-          }, 5_000);
+          historyError: !live ? HISTORY_AFTER_RECONNECT : retried ? HISTORY_MANUAL : HISTORY_AUTO,
+          historyRetry: live && retried ? () => { if (current()) void this.loadHistory(generation, true); } : null });
+        if (!retried && live) {
+          this.historyRetryTimer = setTimeout(() => { if (current()) void this.loadHistory(generation, true); }, 5_000);
         }
       }
     } finally {
@@ -264,6 +271,6 @@ export class MarketFeed {
     this.pendingTrades = [];
     this.pendingCandles = [];
     this.sawTrades = false;
-    if (Object.keys(patch).length) this.store.setState(patch);
+    if (Object.keys(patch).length) this.store.setState({ ...patch, lastUpdateAt: Date.now() });
   }
 }

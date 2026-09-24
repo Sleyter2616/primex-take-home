@@ -4,12 +4,16 @@ import { CandlestickSeries, ColorType, createChart, CrosshairMode,
   type CandlestickData, type UTCTimestamp } from 'lightweight-charts';
 import { metric } from '../perf/metrics';
 import { marketStore, staleLabel } from '../data/store';
+import { time } from './format';
 import type { Candle } from '../data/types';
 
 const bar = (candle: Candle): CandlestickData => ({ ...candle, time: candle.time as UTCTimestamp });
 
 export function PriceChart() {
-  const stale = useStore(marketStore, state => staleLabel(state.connection, state.candles.length > 0));
+  const stale = useStore(marketStore, state => staleLabel(state.connection, state.candles.length > 0,
+    state.lastUpdateAt ? `${time(state.lastUpdateAt)} UTC` : undefined));
+  const live = useStore(marketStore, state => state.connection === 'live');
+  const retry = useStore(marketStore, state => state.historyRetry);
   const container = useRef<HTMLDivElement>(null);
   const loading = useStore(marketStore, state => state.historyLoading);
   const error = useStore(marketStore, state => state.historyError);
@@ -77,10 +81,14 @@ export function PriceChart() {
     </div>
     <div className="chart-wrap">
       <div className="chart-canvas" ref={container} />
-      {empty && <div className="chart-empty">{!coin ? 'Waiting for market list' : loading ? 'Loading candle history…' : 'Waiting for the first candle'}</div>}
+      {empty && <div className="chart-empty">{!coin ? 'Waiting for market list' : loading ? 'Loading candle history…' : error ? 'No candle history' : 'Waiting for the first candle'}</div>}
+      {error && <div className="chart-notice" role="alert">
+        <span>{error}{live && ' Order book and trades are live.'}</span>
+        {retry && <button onClick={retry}>Retry</button>}
+      </div>}
     </div>
-    <div className={`chart-caption ${error ? 'warning' : ''} ${stale ? 'stale' : ''}`}>
-      <span>{stale && `${stale}. `}{error || (loading && !empty ? 'Refreshing history… live updates continue.' : 'Scroll to zoom · drag to explore')}</span>
+    <div className={`chart-caption ${stale ? 'stale' : ''}`}>
+      <span>{stale ?? (loading && !empty ? 'Refreshing history… live updates continue.' : 'Scroll to zoom · drag to explore')}</span>
       <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">Charts by TradingView</a>
     </div>
   </section>;

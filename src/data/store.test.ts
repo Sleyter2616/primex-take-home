@@ -13,4 +13,8 @@ describe('staleLabel', () => {
     expect(staleLabel('connecting', true)).toBe('Stale · reconnecting');
     expect(staleLabel('offline', true)).toBe('Stale · offline');
   });
+  it('appends the last update time when one is known', () => {
+    expect(staleLabel('offline', true, '00:35:40 UTC')).toBe('Stale · offline · last update 00:35:40 UTC');
+    expect(staleLabel('live', true, '00:35:40 UTC')).toBeNull();
+  });
 });
