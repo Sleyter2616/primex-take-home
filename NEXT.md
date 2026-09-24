@@ -9,7 +9,8 @@ Checkpoint **c** is complete (commit `feat: complete checkpoint c`). Next: revie
 - Stale rule fixed: a panel is stale only when it shows retained data while not live (`staleLabel` in `store.ts`, 2 new tests). Before, empty panels said "stale" during every initial connect and market switch.
 - Phone layout fix: the PERP badge overlapped the mid price at 375 px; the picker no longer shrinks below its content.
 - Profiler runs recorded for BTC and ETH (60 s each); numbers, method and caveats are in README "Measured render counts". Testnet was quiet, so the runs show isolation, not throughput.
-- Browser-checked: market switch, simulated offline/online, 375/768/1280 widths, no console errors. Not reproduced: markets REST failure and Retry.
+- Browser-checked: market switch, simulated offline/online, 375/768/1280 widths, no console errors.
+- Verification gaps closed 2026-09-24 with a scripted headless Chrome run (54/54 checks, table in README Verification): markets failure and Retry, rapid and settled BTC/ETH/BTC, blocked candle history, real network offline and restore, switching while offline, phone layout in every error state. Fixed three error-state display bugs it found.
 - README: Trade-offs section, 200-minute history window, no trade replay, limitations. 31 tests, typecheck and build pass.
 
 ## Checkpoint c: state at pause (history)
@@ -36,7 +37,6 @@ Codex paused checkpoint c at `0483b91` with stale indications, the `onopen` offl
 ## Unverified / limitations
 
 - Render counts measured only on a quiet testnet feed; no high-volume replay and no frame timings.
-- Markets REST failure and Retry path not reproduced in a browser.
 - Candle revision `n` is not treated as a protocol sequence number. Same-minute out-of-order live revisions remain a documented limitation; confirm a server ordering contract before adding heuristics.
 - Reconnect fills only the retained history window, not arbitrary-duration gaps. Trade replay is not guaranteed.
 - No Git remote configured; code is durable on the user's Mac and available to a local Claude reviewer. No deployment or submission performed.

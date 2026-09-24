@@ -37,7 +37,7 @@ function MarketSelector() {
     }).finally(() => clearTimeout(timeout));
     return () => { active = false; clearTimeout(timeout); abort.abort(); };
   }, [attempt]);
-  return <div className="market-picker">
+  return <><div className="market-picker">
     <span className="coin-icon" aria-hidden="true">{coin ? coin.slice(0,1) : '·'}</span>
     <div><label htmlFor="market">Perpetual market</label>
       <select id="market" value={coin} disabled={!markets.length}
@@ -46,21 +46,23 @@ function MarketSelector() {
           marketStore.setState({ coin: event.target.value, book: null, trades: [], candles: [],
             tradesReceived: false, historyLoading: true, historyError: null, connection: 'connecting' });
         }}>
-        {!markets.length && <option value="">Loading markets…</option>}
+        {!markets.length && <option value="">{error ? 'Unavailable' : 'Loading…'}</option>}
         {markets.map(market => <option key={market.name} value={market.name}>{market.name} / USD</option>)}
       </select>
     </div>
     <span className="contract-badge">PERP</span>
-    {error && <div className="market-error" role="alert">{error} <button onClick={() => setAttempt(n => n + 1)}>Retry</button></div>}
-  </div>;
+  </div>
+  {error && <div className="market-error" role="alert">Markets unavailable: {error} <button onClick={() => setAttempt(n => n + 1)}>Retry</button></div>}
+  </>;
 }
 
 function ConnectionStatus() {
   const connection = useStore(marketStore, state => state.connection);
   const error = useStore(marketStore, state => state.feedError);
+  const coin = useStore(marketStore, state => state.coin);
   const labels = { live: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting', offline: 'Offline' };
   return <div className={`connection ${connection}`} role="status" title={error ?? 'Hyperliquid testnet WebSocket'}>
-    <span className="status-dot" />{error ? `Error · ${error}` : labels[connection]}
+    <span className="status-dot" />{error ? `Error · ${error}` : coin ? labels[connection] : 'Waiting for markets'}
   </div>;
 }
 

@@ -95,7 +95,24 @@ Raw results:
 
 The automated suite (31 tests) covers the stale-label rule, offline/online events, the exact backoff cap including jitter, one-shot history retry, rejection diagnostics, a real captured trades fixture, reconnect flushing, snapshot ordering and depth, malformed inputs, trade deduplication and caps, both candle payload shapes, history/live merging, frame coalescing, unrelated slice identity, late-market callbacks, reconnect/resubscribe, heartbeat timeout and teardown.
 
-Browser checks on 2026-09-23 against live testnet (built-in Chromium 152): BTC and ETH load with history, book and trades; switching BTC to ETH shows `Connecting` and loading text with no stale labels, then goes live within 5 seconds; dispatching the browser `offline` event marks the book, trades, summary and chart `Stale · offline`, and the `online` event reconnects and clears the labels; no horizontal scroll or overlapping text at 375, 768 and 1280 pixels wide; no console errors. The `offline` and `online` checks fire the window events the feed listens to; they do not cut the real network. The markets REST failure and `Retry` path was not reproduced in the browser. Automated lifecycle tests simulate connection failures; they are not a substitute for a production soak test.
+Scripted lifecycle checks, 2026-09-24 about 00:30 UTC, against live testnet and the dev server. Headless Chrome 153, fresh profile, phone viewport 375 x 812 with a 1280 x 800 capture of the markets error, driven over the Chrome DevTools Protocol. The script fails only the chosen REST request type (`meta` or `candleSnapshot`) with `Fetch.failRequest`, cuts the network with `Network.emulateNetworkConditions` (real offline: `navigator.onLine` false, new sockets fail), and logs every WebSocket, subscribe and unsubscribe frame and received channel. It also wraps `WebSocket` in the page to record when the app itself calls `close()`, and subscribes to the store to flag any book, trade or candle price that does not fit the selected coin (BTC above 20,000; ETH between 300 and 20,000). Result: 54 of 54 checks passed.
+
+| Scenario | Observed |
+|---|---|
+| Markets REST failure on first load | Inline `Markets unavailable` row with `Retry` in its own row (no overlap at either width); badge `Waiting for markets`; chart `Waiting for market list`; no socket opened. Retry loads markets and BTC goes live. |
+| Rapid BTC to ETH to BTC (150 ms apart) | 2 sockets created; the ETH one closed before its handshake. One open socket afterwards, subscribed to `l2Book`, `trades` and `candle` for BTC only. |
+| Settled BTC to ETH to BTC | Each switch unsubscribes and closes the old socket, then one new socket subscribes only to the new coin. |
+| Candle history blocked, switch to ETH | `retrying in 5 seconds`, exactly one retry about 5 s later, then `history retries on reconnection`; no further history requests over the next 8 s; book and trades stay live on one socket. |
+| Network offline (history still blocked) | State `offline`; panels with data say `Stale · offline`; the app closes its socket at once; retry sockets at +1.1, +3.3, +7.3 and +15.4 s all failed, none connected. |
+| Network restored | One immediate reconnect, history reloads (block lifted), error and stale labels clear, one socket with ETH subscriptions only. |
+| Switch to BTC while offline, then restore | No stale labels on the emptied panels while offline; restore reaches BTC live with one BTC-only socket. |
+| Whole run | No store update carried a price from the other market; the app never created a socket while another was unclosed; no frames on closed sockets; no uncaught exceptions or console errors; no horizontal overflow in any capture; chart empty-state text rendered above the chart canvas. |
+
+Chrome reports a closed socket only after its close handshake finishes, so under offline emulation a socket the app has already closed still appears open until the network returns; the app-level `close()` record is the source of truth there.
+
+The run found and fixed three display bugs in error states: the markets error was absolutely positioned and covered the chart heading; the chart's loading and waiting text sat under the chart canvases (Lightweight Charts uses z-index 1 to 3) and was invisible at every width; with no market list, the badge said `Connecting` and the chart said `Loading candle history` although nothing was loading.
+
+Earlier manual checks in the desktop app's built-in browser covered 768 and 1280 widths on live data. Automated lifecycle tests simulate connection failures; neither is a substitute for a production soak test.
 
 ## Trade-offs
 
@@ -120,7 +137,7 @@ Each entry: the decision, the alternative, and why.
 - The connection badge reports socket health, not per-channel freshness.
 - No manual history retry control after the automatic retry is used.
 - Candle revision `n` is not treated as a sequence number; same-minute out-of-order live revisions are not detected.
-- No browser automation yet for market switching, offline recovery, keyboard access or mobile layout; these were checked by hand as described in Verification.
+- The lifecycle script used for Verification is not part of this repository or of `npm test`; it needs a local Chrome and a running dev server. Keyboard access has no automated check.
 - A shared socket across market changes could be reconsidered once subscription acknowledgements have broader test coverage.
 
 The application deliberately excludes trading, authentication, wallet integration, order forms, alternate candle intervals and persistence.

@@ -77,7 +77,7 @@ export function PriceChart() {
     </div>
     <div className="chart-wrap">
       <div className="chart-canvas" ref={container} />
-      {empty && <div className="chart-empty">{loading ? 'Loading candle history…' : 'Waiting for the first candle'}</div>}
+      {empty && <div className="chart-empty">{!coin ? 'Waiting for market list' : loading ? 'Loading candle history…' : 'Waiting for the first candle'}</div>}
     </div>
     <div className={`chart-caption ${error ? 'warning' : ''} ${stale ? 'stale' : ''}`}>
       <span>{stale && `${stale}. `}{error || (loading && !empty ? 'Refreshing history… live updates continue.' : 'Scroll to zoom · drag to explore')}</span>
