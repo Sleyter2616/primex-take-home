@@ -27,6 +27,16 @@ Browser lifecycle checks (needs `npm run dev` running and a local Google Chrome;
 node scripts/verify-lifecycle.mjs http://127.0.0.1:5173/
 ```
 
+Synthetic load harness (generated data, not Hyperliquid; see Synthetic load below):
+
+```sh
+npm run build && npm run preview
+```
+
+```sh
+node scripts/load-harness.mjs http://127.0.0.1:4173/ --throttle 4
+```
+
 ## Scope
 
 - Active perpetuals from testnet metadata, with BTC, ETH and SOL listed first.
@@ -104,6 +114,44 @@ Raw results:
 {"coin":"ETH","visibleAtStart":true,"visibilityChanges":0,"windowMs":60000,"completedAfterMs":60001,"Header":0,"ConnectionStatus":0,"MarketSelector":0,"MarketSummary":3,"PriceChart":0,"TradesTape":5,"OrderBook":11,"bookMessages":11,"tradeBatches":5,"seriesUpdate":5,"seriesSetData":0}
 ```
 
+## Synthetic load
+
+**All data in this section is synthetic: generated messages, not Hyperliquid data.** The quiet-feed counts above show render isolation; they say nothing about a firehose. Two harnesses push bursts through the same feed-processing path. Neither adds code to the application.
+
+**1. Unit bursts (`src/data/feed.load.test.ts`, part of `npm test`).** The real `MarketFeed` receives generated messages from a fake socket with a seeded random generator:
+- 5,000 shuffled book snapshots between two frames: only the newest is published, in one store update.
+- 400 shuffled trade batches (over 5,000 unique trades, with duplicates and equal timestamps) spanning several frames: the store holds exactly the newest 50 unique trades, and the pending buffer never exceeds 50.
+- 20,000 candle revisions across 1,000 minutes while history is loading: the pending and during-history candle buffers never exceed 300, and the store holds the newest 300 minutes with their latest revisions.
+- 100 frames of mixed load: exactly one store update per frame.
+
+**2. Browser harness (`scripts/load-harness.mjs`).** Headless Chrome replaces `WebSocket` and the two REST calls inside the test page only, and shows a banner reading `SYNTHETIC LOAD TEST: generated data, not Hyperliquid`. The unmodified app (parsing, frame buffer, store, React panels, chart adapter) then receives, after a 3 s warm-up that fills the panels:
+- 30 s at 200 book snapshots, 100 trade batches (10 trades each, about 20% repeated) and 50 candle updates per second, which is roughly 1,000 times the book rate observed on testnet;
+- then one burst of 3,000 book snapshots, 1,500 trade batches and 500 candle updates in a single task.
+
+The generator runs on the page's main thread, so its own work (building and serializing messages) is included in the measured cost. A key press is sent every 500 ms and measured with the Event Timing API. Before each run the long-task probe must report a planted 60 ms task; this matters because work started from a DevTools `evaluate` call is not reported as a long task, so the burst is scheduled as an ordinary page task. Pass limits were fixed before running.
+
+Runs on 2026-09-24 about 02:30 UTC: Apple M5 Pro, headless Chrome 153, 1280 x 800. The dev run uses `?profile=1` for React commit counts; the production runs use `npm run preview`.
+
+| Result (synthetic) | Dev | Production | Production, CPU 4x slower |
+|---|---|---|---|
+| Messages sent (book / trade batches / candles) | 9,714 / 4,857 / 2,178 | 9,712 / 4,856 / 2,178 | 9,838 / 4,919 / 2,209 |
+| Newest book on screen after load and after burst | yes / yes | yes / yes | yes / yes |
+| Trade rows equal the newest 50 unique trades | yes / yes | yes / yes | yes / yes |
+| DOM nodes (after warm-up, after load, after burst) | 1,441 / 1,061 / 1,061 | 1,524 / 1,054 / 1,054 | 1,464 / 1,054 / 1,054 |
+| JS heap after GC, MB (same points) | 11.2 / 10.5 / 10.4 | 4.3 / 4.5 / 4.5 | 4.4 / 4.5 / 4.5 |
+| Frame interval p50 / p95 / max, ms | 16.7 / 16.7 / 16.8 | 16.7 / 16.7 / 16.8 | 16.7 / 16.7 / 16.8 |
+| Long tasks during sustained load | 0 | 0 | 0 |
+| Timer lag p95 / max, ms | 4.2 / 12.8 | 4.7 / 13.2 | 18.5 / 35.9 |
+| Longest key press (Event Timing), ms | 32 | 32 | 32 |
+| Burst task / newest data on screen after, ms | 43 / 15 | 44 / 7 | 155 / 26 |
+| `PriceChart` commits / chart `update` calls | 0 / 1,508 | not instrumented | not instrumented |
+| `OrderBook` commits / book messages | 1,825 / 9,114 | not instrumented | not instrumented |
+| Header, status, selector commits | 0 | not instrumented | not instrumented |
+
+What this supports, for this synthetic load on this machine: the newest book and the newest 50 unique trades reach the screen during and after bursts; buffers, DOM size and heap stay flat; the chart keeps updating through the chart API with no React commits of the chart component; order-book commits are bounded by frames (about 60 per second), not by messages (about 200 per second during sustained load, plus the 3,000-message burst); the page kept 60 frames per second with no long tasks, and at 4x CPU throttling the only long task was the deliberate 5,000-message burst (154 ms), after which the newest data was on screen within 26 ms.
+
+What it does not support: real-market message shapes and rates (the data is generated and uniform), slower phones or GPUs, or behavior beyond 30 s. Headless Chrome paces frames at 60 Hz regardless of CPU throttling, so frame intervals cannot show dropped frames caused by painting; long tasks, timer lag and input timing are the better signals here. The first attempts found three harness errors, not app errors, and they were fixed before these numbers: the DOM and heap baseline was taken before the panels were filled, the burst ran where the long-task probe could not see it, and the harness's own trade bookkeeping grew the heap.
+
 ## Libraries
 
 - **React + TypeScript:** typed components and explicit data contracts.
@@ -114,7 +162,7 @@ Raw results:
 
 ## Verification
 
-The automated suite (38 tests) covers per-panel freshness (retained data stays stale after a reconnect until its channel delivers, including a reconnect in the same millisecond, a clock stepping backwards, and an empty history response), the stale-label rule and its last-update time, manual history retry after the automatic retry fails, offline/online events, the exact backoff cap including jitter, one-shot history retry, rejection diagnostics, a real captured trades fixture, reconnect flushing, snapshot ordering and depth, malformed inputs, trade deduplication and caps, both candle payload shapes, history/live merging, frame coalescing, unrelated slice identity, late-market callbacks, reconnect/resubscribe, heartbeat timeout and teardown.
+The automated suite (42 tests, including the four synthetic burst tests described under Synthetic load) covers per-panel freshness (retained data stays stale after a reconnect until its channel delivers, including a reconnect in the same millisecond, a clock stepping backwards, and an empty history response), the stale-label rule and its last-update time, manual history retry after the automatic retry fails, offline/online events, the exact backoff cap including jitter, one-shot history retry, rejection diagnostics, a real captured trades fixture, reconnect flushing, snapshot ordering and depth, malformed inputs, trade deduplication and caps, both candle payload shapes, history/live merging, frame coalescing, unrelated slice identity, late-market callbacks, reconnect/resubscribe, heartbeat timeout and teardown.
 
 Scripted lifecycle checks (`scripts/verify-lifecycle.mjs`), last run 2026-09-24 about 01:15 UTC against live testnet and the dev server. Headless Chrome 153 with a fresh profile, phone viewport 375 x 812 throughout plus a 1280 x 800 capture of the markets error, driven over the Chrome DevTools Protocol. The script fails only the chosen REST request type (`meta` or `candleSnapshot`) with `Fetch.failRequest`, cuts the network with `Network.emulateNetworkConditions` (real offline: `navigator.onLine` false, new sockets fail), and logs every WebSocket, subscribe and unsubscribe frame and received channel. It wraps `WebSocket` in the page to record when the app itself calls `close()`, and subscribes to the app's store to flag any book, trade or candle price that does not fit the selected coin (BTC above 20,000; ETH between 300 and 20,000). Every capture is checked for horizontal overflow, a chart empty-state text that is actually on top, and an error row that overlaps no panel. Result: 65 of 65 checks passed. Screenshots and `result.json` are written to `$TMPDIR/hl-verify`.
 
@@ -155,7 +203,7 @@ Each entry: the decision, the alternative, and why.
 
 ## Limitations
 
-- Render counts were measured on a quiet testnet feed; no high-volume test and no frame timings.
+- Load behavior is measured with synthetic data only (see Synthetic load): uniform generated messages on one fast machine, 30 s long. Real-market bursts, slower devices and long sessions are not measured.
 - Reconnect refills only the last 200 minutes of candles. Trades missed during a disconnect are not replayed or marked as a gap.
 - The connection badge reports socket health, not per-channel freshness: a live socket whose book channel stopped would not be flagged.
 - Candle revision `n` is not treated as a sequence number; same-minute out-of-order live revisions are not detected.
@@ -165,7 +213,7 @@ Each entry: the decision, the alternative, and why.
 
 In priority order, each with the reason:
 
-1. **Replay harness for load.** Record real WebSocket frames (a busy mainnet session, read-only) and replay them at 1x, 10x and 50x against the dev and production builds, measuring frame time, React commits, long tasks and memory over 30 minutes. This is the missing evidence for the performance claims and the only sound basis for heavier optimizations such as canvas-rendered book rows.
+1. **Replay real traffic through the load harness.** Record real WebSocket frames (a busy mainnet session, read-only) and feed them through `scripts/load-harness.mjs` instead of generated messages, at 1x, 10x and 50x, for 30 minutes, on a mid-range laptop and a phone as well as this machine. The synthetic harness shows the pipeline holds up; real message shapes, bursts and devices are what would justify or rule out heavier optimizations such as canvas-rendered book rows.
 2. **Deterministic browser tests in CI.** Serve the replayed frames and REST fixtures from a local mock server, then run the lifecycle checks with Playwright on every change. Today's script proves the behavior but depends on live testnet. Add keyboard-only navigation and an automated accessibility scan (axe) to the same run.
 3. **Mark trade gaps after reconnect.** Insert a visible `Gap: disconnected HH:MM:SS to HH:MM:SS` row in the tape so a trader never reads a continuous tape that is not. Check whether the info endpoint can backfill recent trades before adding any fetching.
 4. **Per-channel freshness.** Track the last message time per channel and flag a channel that goes quiet while the socket is live, with thresholds tuned from the replay data.
